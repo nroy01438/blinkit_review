@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from aisle.api.routers import admin as admin_router
 from aisle.api.routers import insights as insights_router
 from aisle.api.routers import overview as overview_router
+from aisle.api.routers import qa as qa_router
 from aisle.api.routers import runs as runs_router
 from aisle.api.routers import sources as sources_router
 from aisle.api.routers import themes as themes_router
@@ -27,6 +28,7 @@ app.include_router(runs_router.router)
 app.include_router(themes_router.router)
 app.include_router(insights_router.router)
 app.include_router(sources_router.router)
+app.include_router(qa_router.router)
 
 
 @app.get("/health")

@@ -152,6 +152,31 @@ export function fetchNegativeControl() {
   return api.get<Record<string, unknown>>("/quality/negative-control");
 }
 
+export interface QuestionPack {
+  id: string;
+  question: string;
+  method: string;
+}
+
+export interface AskResponse {
+  answer: string;
+  citations: { document_id: number; quote: string }[];
+  refused: boolean;
+  tool_outputs?: Record<string, unknown>;
+}
+
+export function fetchQuestionPacks() {
+  return api.get<QuestionPack[]>("/question-packs");
+}
+
+export function runQuestionPack(id: string) {
+  return api.get<Record<string, unknown>>(`/question-packs/${id}/run`);
+}
+
+export function askAgent(question: string) {
+  return api.post<AskResponse>("/ask", { question });
+}
+
 export function fetchSources() {
   return api.get<
     { id: number; name: string; kind: string; brand: string; is_active: boolean; last_fetched_at: string | null }[]

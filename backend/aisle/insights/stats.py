@@ -22,7 +22,15 @@ def wilson_ci(successes: int, n: int, *, confidence: float = 0.95) -> tuple[floa
     margin = z * math.sqrt((p_hat * (1 - p_hat) + z**2 / (4 * n)) / n)
     low = (centre - margin) / denom
     high = (centre + margin) / denom
-    return p_hat, max(0.0, low), min(1.0, high)
+    # Clamp to [0, 1] AND to the point estimate itself — at the p_hat=0/1
+    # boundary the formula's own floating-point rounding can otherwise put
+    # p_hat a few ULPs outside its own interval (e.g. high=0.999999999999998
+    # when p_hat=1.0 exactly), which would make "the point estimate isn't
+    # inside its own CI" a real, reproducible bug rather than a rounding
+    # artifact callers should have to work around.
+    low = min(max(0.0, low), p_hat)
+    high = max(min(1.0, high), p_hat)
+    return p_hat, low, high
 
 
 def _z_for(confidence: float) -> float:

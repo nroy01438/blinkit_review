@@ -33,7 +33,7 @@ state:
 | 4 — Themes | ✅ Done, verified (see honesty caveat below — embeddings use a deterministic local fallback, not the real sentence-transformer model) |
 | 5 — Insights + IQS | ✅ Done, verified (negative-control experiment run for real — see honesty caveats below) |
 | 6 — Frontend | ✅ Done, verified against the live API (see honesty caveats below — no shadcn/ui, /ask is a shell pending Phase 7) |
-| 7 — QnA agent | ⬜ Not started |
+| 7 — QnA agent | ✅ Done, verified live (all 8 question packs + free-form Q&A + a real refusal — see honesty caveats below) |
 | 8 — Cron + deploy | ⬜ Not started |
 
 **This README is updated as later phases land — treat the table above as the
@@ -69,7 +69,7 @@ weekly GitHub Action once repo secrets are set.
 | Classifier accountability | Never measured | Golden set: P/R/F1, Cohen's κ, calibration | Pipeline built and running; against the *synthetic proxy* labels (not real humans — see caveat below): stage-1 junk recall 0.93, stage-3 relevance F1 0.96, κ 0.93 — all three clear the §6 acceptance gate, but that gate hasn't been cleared against real human labels yet |
 | Traceability | None | Groundedness score via independent verifier | Implemented; every insight links to its evidence with an atomic-claim groundedness check that caps the grade at C on any unsupported claim — see the negative-control writeup below for a concrete case where that cap was the difference between B and C |
 | Freshness | One-shot | Weekly cron, emerging/decaying alerts | Workflow scaffolded in Phase 8 |
-| Interrogability | Static export | RAG QnA agent with citations + refusal | Pending Phase 7 |
+| Interrogability | Static export | RAG QnA agent with citations + refusal | Implemented and verified live: hybrid BM25+vector retrieval with RRF fusion, a refusal that actually fires on out-of-corpus questions, and all 8 mandated question packs answering with real computed n/CI — see the Phase 7 writeup below |
 
 ## Tech stack
 
@@ -487,6 +487,83 @@ being explicit about rather than burying:
   blocks the HTTP request until the pipeline stage finishes — fine at this
   corpus's size (seconds), but a real deployment would enqueue these
   instead of holding a request open.
+
+## Architecture notes (Phase 7)
+
+- **`aisle/qa/retrieval.py`** — hybrid search: BM25 (`rank_bm25`) fused with
+  pgvector cosine similarity via Reciprocal Rank Fusion, then a lightweight
+  lexical-overlap rerank. Critically, a document only counts as genuinely
+  retrieved if it clears a real relevance bar (BM25 score > 0 *or* cosine
+  similarity ≥0.35) — RRF fusion alone always produces a full ranking of
+  the entire pool no matter how irrelevant the query is, which would make
+  the refusal rule below unable to ever fire. Found this the hard way: the
+  first version of the refusal test failed because "retrieval" was
+  returning the whole corpus, ranked, for a string of made-up words.
+- **`aisle/qa/tools.py`** — the five tools (§11): `search_reviews` (wraps
+  retrieval), `get_theme_stats`, `run_segment_comparison` (a real
+  two-proportion z-test between two segment cohorts' rates, with an
+  optional barrier/behaviour/category/sentiment/brand filter),
+  `compute_prevalence` (Wilson CI on an arbitrary filter), and `get_insight`.
+  Every one is a plain, independently callable, independently tested
+  function — the agent doesn't have any capability the tools themselves
+  don't have.
+- **`aisle/qa/agent.py`** — retrieves first; refuses outright (§11) below 5
+  retrieved documents, showing whatever few were found rather than
+  extrapolating; otherwise uses rule-based signal detection (segment names,
+  "compare"/"how many"/filter keywords, an explicit theme/insight
+  reference) to decide which additional tool(s) to call, executes them for
+  real, and only then synthesizes a cited answer from the actual evidence
+  and actual computed numbers.
+- **`aisle/qa/question_packs.py`** implements all 8 mandated packs (§10) as
+  dedicated analysis methods — not eight prompts routed through the chat
+  agent — each with its own retrieval/aggregation logic and a common
+  envelope (`answer_summary`, `n`, CI where applicable, `top_quotes`,
+  `chart_data`, `generated_at`) so the frontend renders them uniformly.
+  Verified live against the real corpus; representative real outputs from
+  one run: Q1 "201 of 279 documents show habitual-replenisher behaviour
+  (72.0%)", Q2 top barrier `unclear_return_policy` (48/279), Q7 explorer
+  segment shows exploration language at 89.7% vs. other segments lower,
+  each with a real two-proportion z-test where a comparison is drawn.
+- **Verified live, not just unit-tested**: ran the backend + frontend
+  together, exercised all 8 packs via `/question-packs/{id}/run`, asked a
+  free-form question that correctly triggered the segment-comparison tool
+  with real citations, and asked a nonsense question that correctly
+  produced the refusal message — see the screenshot from this build.
+
+### Honesty caveats (Phase 7)
+
+- **Tool selection is rule-based, not a free-form Claude tool-use loop.**
+  Under `MOCK_LLM` there is no real model choosing when to call which tool,
+  so a genuine agentic loop would have nothing authentic driving it in this
+  environment. The rules in `_decide_tools` are a legible stand-in for the
+  same signals a real tool-use loop would act on (segment names, filter
+  keywords, explicit references) — every tool underneath is real and
+  independently callable, so swapping in an actual Anthropic tool-use loop
+  later is a change to *how tools get selected*, not to what they do.
+- **No real multi-turn context threading server-side.** "Conversation
+  memory" is implemented client-side (`app/ask/page.tsx` keeps the thread
+  and exports it as a Markdown research note); each question still hits
+  `/ask` independently — the agent doesn't receive prior turns as context.
+  A real implementation would pass conversation history into the retrieval/
+  synthesis prompt.
+- **No token streaming.** `POST /ask` returns a complete JSON response, not
+  a token stream — `MOCK_LLM` doesn't produce a token stream to begin with
+  (`mock_synthesize` builds the whole answer in one call), so implementing
+  fake streaming on top of it would be theater, not substance. Deferred to
+  when this runs against a real, streaming-capable model call.
+- **Discovery-surface and information-gap extraction (Q3, Q5) are regex
+  keyword heuristics over raw text**, not a dedicated LLM extraction stage
+  — PM-Gate's Stage 4 (§6) doesn't extract these fields today. Reasonable
+  at this corpus's synthetic, template-driven vocabulary; a real corpus's
+  more varied phrasing would need either a dedicated extraction stage or a
+  more capable retrieval-based approach.
+- **Found and fixed a real Wilson-CI floating-point bug while building
+  this**: at the p=1.0 (or p=0.0) boundary, `wilson_ci`'s own arithmetic
+  could put the point estimate a few floating-point ULPs outside its own
+  interval (e.g. `ci_high=0.9999999999999998` when the rate is exactly
+  `1.0`) — `aisle/insights/stats.py` now clamps the interval to always
+  contain the point estimate, closing the gap rather than leaving callers
+  to work around it.
 
 ## Known limitations / honesty notes
 
