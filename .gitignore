@@ -1,0 +1,20 @@
+# Python
+**/__pycache__/
+*.pyc
+backend/.venv/
+backend/.pytest_cache/
+*.egg-info/
+
+# Env
+.env
+.env.local
+
+# Node / Next.js (frontend, once it exists)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# OS
+.DS_Store

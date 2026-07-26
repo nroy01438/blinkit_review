@@ -1,0 +1,60 @@
+# The eight mandated Discovery Question Packs. Each is a first-class object
+# with its own retrieval strategy, analysis method, and output shape.
+
+packs:
+  - id: q1_repeat_categories
+    question: "Why do users repeatedly buy from the same categories?"
+    method: behaviour_code_frequency
+    params:
+      segment_filter: [habitual_replenisher]
+      group_by: [behaviour_codes]
+      include_jtbd_clusters: true
+
+  - id: q2_exploration_barriers
+    question: "What prevents users from exploring new categories?"
+    method: barrier_code_ranking
+    params:
+      group_by: [barrier_codes]
+      segment_by: [categories_mentioned, brand]
+      min_n_for_ci: 5
+
+  - id: q3_discovery_surfaces
+    question: "How do users discover products today?"
+    method: discovery_surface_extraction
+    params:
+      surfaces: [search, home_feed, banner, notification, word_of_mouth, offline]
+      rank_by: mention_count
+
+  - id: q4_habit_role
+    question: "What role do habits play in shopping behaviour?"
+    method: habit_lexicon_crosstab
+    params:
+      lexicon: [always, every week, same list, usual, "as usual", routine, "every time"]
+      cross_with: segment_label
+
+  - id: q5_information_gap
+    method: information_gap_extraction
+    question: "What information do users need before trying a new category?"
+    params:
+      gap_dimensions: [freshness, size, origin, expiry, authenticity, fit, return_policy]
+
+  - id: q6_frequent_frustrations
+    question: "What frustrations emerge repeatedly?"
+    method: theme_prevalence_by_severity
+    params:
+      include_ops_bucket: true
+      rank_by: severity_x_frequency
+
+  - id: q7_segment_experimentation
+    question: "Which segments are more likely to experiment?"
+    method: exploration_rate_by_segment
+    params:
+      stat_test: two_proportion_z
+      alpha: 0.05
+
+  - id: q8_unmet_needs
+    question: "What unmet needs emerge consistently across discussions?"
+    method: unmet_need_clustering
+    params:
+      min_sources: 2
+      min_iqs: 65

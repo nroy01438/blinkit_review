@@ -1,0 +1,63 @@
+# PM-Gate scoring configuration. Tune against the golden set (see /quality) —
+# do not hand-guess these numbers.
+
+pm_utility:
+  weights:
+    specificity: 0.35
+    actionability: 0.35
+    evidence_strength: 0.20
+    emotional_intensity: 0.10
+  thresholds:
+    high_signal: 60
+    medium: 35
+    # below `medium` => low
+
+discovery_relevance:
+  # 0-4 scale; docs scoring >= this are eligible for clustering/insights.
+  relevant_floor: 2
+
+confidence:
+  abstain_below: 0.6
+  self_consistency:
+    enabled: true
+    samples: 3
+    temperature: 0.3
+    # trigger self-consistency only when a score sits within this margin of a
+    # verdict threshold (e.g. pm_utility_score within 5 of 60 or 35)
+    threshold_margin: 5
+  target_abstention_rate:
+    low: 0.05
+    high: 0.12
+
+junk_gate:
+  min_chars_no_rating_context: 15
+
+iqs:
+  weights:
+    groundedness: 25
+    evidence_volume: 15
+    statistical_precision: 15
+    source_triangulation: 15
+    temporal_stability: 10
+    actionability: 10
+    novelty: 10
+  grade_bands:
+    A: 80
+    B: 65
+    C: 50
+    # below C => D
+
+theme_merge:
+  centroid_cosine_similarity_threshold: 0.85
+  incremental_assign_cosine_threshold: 0.8
+
+clustering:
+  umap:
+    n_neighbors: 15
+    min_dist: 0.0
+  hdbscan:
+    min_cluster_size_floor: 15
+    min_cluster_size_pct_of_corpus: 0.005
+  stability:
+    seeds: [13, 42, 137]
+  noise_pct_alert_threshold: 0.25

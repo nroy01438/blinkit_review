@@ -1,0 +1,85 @@
+# Source registry. Each entry seeds a row in the `sources` table.
+# `enabled: false` sources are registered but never fetched by the scheduler —
+# flip them on once credentials exist (see .env.example).
+
+sources:
+  - name: playstore_blinkit
+    kind: playstore
+    brand: blinkit
+    enabled: true
+    config:
+      package_name: com.grofers.customerapp
+      sort_orders: [NEWEST, MOST_RELEVANT]
+      country: in
+      lang: en
+
+  - name: appstore_blinkit
+    kind: appstore
+    brand: blinkit
+    enabled: true
+    config:
+      app_id: "1085004832" # Blinkit (Grofers) iOS app id, verify before prod use
+      country: in
+
+  - name: reddit
+    kind: reddit
+    brand: mixed
+    enabled: false # requires REDDIT_CLIENT_ID/SECRET
+    config:
+      subreddits: [india, bangalore, mumbai, delhi, IndianFood, personalfinanceindia, startups]
+      query_terms:
+        - blinkit
+        - zepto
+        - instamart
+        - quick commerce
+        - 10 minute delivery
+        - grocery app
+      include_comments: true
+
+  - name: forum_crawl
+    kind: forum
+    brand: mixed
+    enabled: false
+    config:
+      seed_urls: []
+      max_pages: 200
+
+  - name: social_csv_import
+    kind: social
+    brand: mixed
+    enabled: true
+    config:
+      note: "Manual export path only — see /upload. No logged-in scraping."
+
+  - name: marketplace_reviews
+    kind: marketplace
+    brand: mixed
+    enabled: false
+    config:
+      seed_urls: []
+
+  - name: playstore_zepto
+    kind: playstore
+    brand: zepto
+    enabled: true
+    config:
+      package_name: com.zepto.customer
+      sort_orders: [NEWEST, MOST_RELEVANT]
+      country: in
+      lang: en
+
+  - name: playstore_instamart
+    kind: playstore
+    brand: instamart
+    enabled: true
+    config:
+      package_name: in.swiggy.android
+      sort_orders: [NEWEST, MOST_RELEVANT]
+      country: in
+      lang: en
+
+  - name: manual_upload
+    kind: manual_upload
+    brand: mixed
+    enabled: true
+    config: {}

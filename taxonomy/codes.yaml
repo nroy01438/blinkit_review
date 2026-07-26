@@ -1,0 +1,47 @@
+# Controlled vocabulary for behaviour_codes and barrier_codes.
+# The pipeline may PROPOSE additions (written to `proposed_codes` in meta),
+# but only a human approval in /admin moves a code into this file.
+
+behaviour_codes:
+  - reorders_from_saved_list
+  - searches_never_browses
+  - uses_reorder_button
+  - sticks_to_top_search_result
+  - compares_across_apps_before_buying
+  - buys_in_bulk_to_avoid_reordering
+  - switches_apps_for_specific_categories
+  - follows_recommendation_banner
+  - relies_on_past_ratings_only
+  - shops_same_time_of_day
+  - abandons_cart_on_new_category
+
+barrier_codes:
+  - cannot_assess_freshness
+  - no_price_comparison
+  - trust_deficit_new_category
+  - unclear_return_policy
+  - insufficient_product_info
+  - packaging_concerns
+  - unfamiliar_brand
+  - perceived_higher_price
+  - delivery_time_uncertainty_for_new_items
+  - no_time_to_browse
+  - app_navigation_friction
+  - out_of_stock_discourages_retry
+  - inconsistent_quality_on_new_categories
+  - no_visual_size_reference
+
+segments:
+  - habitual_replenisher
+  - explorer
+  - price_optimiser
+  - convenience_maximalist
+  - occasion_buyer
+  - new_user
+  - lapsed_user
+
+lifecycle_stages:
+  - new_user
+  - established_user
+  - lapsed_user
+  - reactivated_user
