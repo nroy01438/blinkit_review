@@ -37,7 +37,7 @@ def run_negative_control_check(run_id: int | None = None) -> dict:
             JOIN themes t ON t.id = ANY(i.theme_ids)
             JOIN theme_documents td ON td.theme_id = t.id
             JOIN documents d ON d.id = td.document_id
-            WHERE (%s IS NULL OR i.run_id = %s)
+            WHERE (%s::bigint IS NULL OR i.run_id = %s::bigint)
             GROUP BY i.id, i.title, i.grade, i.iqs_total, i.theme_ids
             """,
             (run_id, run_id),

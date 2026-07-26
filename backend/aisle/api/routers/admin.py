@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from aisle.db.connection import get_conn
 from aisle.eval import metrics as metrics_module
 from aisle.eval.golden import stratified_sample, submit_golden_label
+from aisle.eval.negative_control import run_negative_control_check
 
 router = APIRouter(tags=["admin"])
 
@@ -70,3 +71,8 @@ def quality_metrics(annotator_id: str = "synthetic_proxy_v1", round: int = 1, sc
             "Real acceptance-gate numbers require labels from an actual /admin/label session."
         ) if annotator_id == "synthetic_proxy_v1" else None,
     }
+
+
+@router.get("/quality/negative-control")
+def negative_control(run_id: int | None = None) -> dict:
+    return run_negative_control_check(run_id)

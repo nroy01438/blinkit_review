@@ -32,7 +32,7 @@ state:
 | 3 — PM-Gate | ✅ Done, verified (see honesty caveat below — metrics are against a synthetic proxy, not real human labels) |
 | 4 — Themes | ✅ Done, verified (see honesty caveat below — embeddings use a deterministic local fallback, not the real sentence-transformer model) |
 | 5 — Insights + IQS | ✅ Done, verified (negative-control experiment run for real — see honesty caveats below) |
-| 6 — Frontend | ⬜ Not started |
+| 6 — Frontend | ✅ Done, verified against the live API (see honesty caveats below — no shadcn/ui, /ask is a shell pending Phase 7) |
 | 7 — QnA agent | ⬜ Not started |
 | 8 — Cron + deploy | ⬜ Not started |
 
@@ -131,6 +131,21 @@ pytest -q   # 19 tests: config, dedupe/simhash, PII hashing+redaction,
 
 uvicorn aisle.api.main:app --reload   # http://localhost:8000/health
 ```
+
+### Frontend (Phase 6)
+
+With the backend above running on :8000:
+
+```bash
+cd frontend
+npm install
+NEXT_PUBLIC_AISLE_API_URL=http://localhost:8000 npm run dev   # http://localhost:3000
+```
+
+The dashboard is empty until you've run the pipeline at least once — either
+via the CLIs above (`aisle.classify.run`, `aisle.cluster.run`,
+`aisle.insights.run`) or the "Run pipeline stages" buttons on `/admin`,
+which call the same code synchronously over HTTP.
 
 ## Architecture notes (Phase 1)
 
@@ -424,6 +439,54 @@ being explicit about rather than burying:
   adversarial/verification passes would likely do better at both — worth
   re-running this exact experiment once real credentials are available, to
   see whether it's a mock-only artifact or a genuine formula gap.
+
+## Architecture notes (Phase 6)
+
+- **`frontend/`** — Next.js 14 App Router + TypeScript + Tailwind + Recharts,
+  all 8 mandated screens (`/`, `/workflow`, `/themes` + detail, `/insights` +
+  detail, `/quality`, `/ask`, `/upload`, `/admin`), each a client component
+  that fetches from the FastAPI backend at `NEXT_PUBLIC_AISLE_API_URL`
+  (`lib/api.ts`) — no mock data baked into the frontend anywhere.
+- **`components/PercentCI.tsx`** is the enforcement mechanism for §15's
+  "no naked percentage, anywhere" rule: every prevalence/rate shown in the
+  UI goes through this component, which always renders `n`/denominator and
+  the Wilson CI alongside the percentage — there's no shorter path to just
+  printing a number.
+- **New backend read endpoints** (`aisle/api/routers/overview.py`,
+  `runs.py`, `themes.py`, `insights.py`, `sources.py`) back the frontend;
+  `/admin/run/*` exposes synchronous on-demand triggers for each pipeline
+  stage (ingest/classify/cluster/insights) so the demo doesn't need a
+  terminal. `/quality/negative-control` surfaces the Phase 5 experiment's
+  real result in the UI, not just in README prose.
+- **Verified against the live stack, not just `next build`**: ran the
+  FastAPI backend and `next dev` together, hit all 8 screens plus theme and
+  insight detail pages with Playwright against the real classified/
+  clustered/insight-generated corpus, and confirmed real data renders
+  (screenshots taken during this build show the actual Wilson CIs, the real
+  IQS radar chart, and the real negative-control PASS verdict — not
+  placeholders). Also added `tests/test_api_routers.py`, a regression test
+  for a real bug this exposed: `/insights` and `/quality/negative-control`
+  threw `psycopg.errors.IndeterminateDatatype` on the frontend's actual
+  no-filter request shape (a bare `%s IS NULL OR col = %s` needs an
+  explicit `::type` cast when every call site passes `None`) — fixed, and
+  covered so it can't silently come back.
+
+### Honesty caveats (Phase 6)
+
+- **No shadcn/ui.** The brief's stack lists it; this build uses plain
+  Tailwind components (`components/*.tsx`) styled to the same effect
+  instead, to avoid the overhead of scaffolding a full generated component
+  library for a build already this large. Swapping specific components to
+  shadcn/ui later is a styling change, not an architecture change.
+- **`/ask` is a UI shell, not a working QnA agent.** It renders the 8
+  question packs and a chat input, calls `POST /ask`, and — verified — shows
+  an honest "not wired up yet" message on the 404 that endpoint currently
+  returns, rather than pretending to answer. Phase 7 implements the actual
+  agent behind it.
+- **Runs synchronously in-request, not in a queue.** `/admin/run/*`
+  blocks the HTTP request until the pipeline stage finishes — fine at this
+  corpus's size (seconds), but a real deployment would enqueue these
+  instead of holding a request open.
 
 ## Known limitations / honesty notes
 
