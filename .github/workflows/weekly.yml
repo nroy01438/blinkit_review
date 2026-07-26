@@ -1,0 +1,78 @@
+name: AISLE weekly run
+
+on:
+  schedule:
+    # Monday 02:00 IST == Sunday 20:30 UTC. GitHub Actions cron uses POSIX
+    # syntax (0 = Sunday).
+    - cron: "30 20 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aisle
+          POSTGRES_PASSWORD: aisle
+          POSTGRES_DB: aisle_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aisle -d aisle_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://aisle:aisle@localhost:5432/aisle_dev
+      # MOCK_MODE/MOCK_LLM default to true so this workflow runs end-to-end
+      # on a cold fork with zero secrets configured (§14's checkpoint).
+      # Set the ANTHROPIC_API_KEY repo secret (and flip these to 'false' in
+      # the "Configure real-mode" step below) to run for real.
+      MOCK_MODE: "true"
+      MOCK_LLM: "true"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      AISLE_MAX_COST_USD: ${{ secrets.AISLE_MAX_COST_USD || '10.00' }}
+      AUTHOR_HASH_SALT: ${{ secrets.AUTHOR_HASH_SALT || 'ci-run-salt' }}
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Apply schema
+        working-directory: backend
+        run: python -m aisle.db.migrate
+
+      - name: Enable real mode if credentials are configured
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          echo "MOCK_MODE=false" >> "$GITHUB_ENV"
+          echo "MOCK_LLM=false" >> "$GITHUB_ENV"
+
+      - name: Seed synthetic corpus (mock mode only — a cold real-mode run relies on the ingestion connectors instead)
+        if: ${{ secrets.ANTHROPIC_API_KEY == '' }}
+        working-directory: backend
+        run: |
+          python -m aisle.ingest.generate_synthetic_corpus
+          python -m aisle.db.seed
+
+      - name: Run the weekly job
+        working-directory: backend
+        run: python -m aisle.jobs.weekly --digest-path weekly_digest.md
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aisle-weekly-digest-${{ github.run_number }}
+          path: backend/weekly_digest.md

@@ -34,7 +34,7 @@ state:
 | 5 — Insights + IQS | ✅ Done, verified (negative-control experiment run for real — see honesty caveats below) |
 | 6 — Frontend | ✅ Done, verified against the live API (see honesty caveats below — no shadcn/ui, /ask is a shell pending Phase 7) |
 | 7 — QnA agent | ✅ Done, verified live (all 8 question packs + free-form Q&A + a real refusal — see honesty caveats below) |
-| 8 — Cron + deploy | ⬜ Not started |
+| 8 — Cron + deploy | ✅ Done, verified live (deployment itself not exercised — see honesty caveats below) |
 
 **This README is updated as later phases land — treat the table above as the
 live source of truth, not the prior-art comparison table below, which fills
@@ -68,7 +68,7 @@ weekly GitHub Action once repo secrets are set.
 | Statistical honesty | Naked percentages, no denominator | Every number ships `n`, denominator, Wilson 95% CI | Implemented in `aisle.insights.stats`; used for theme prevalence, insight prevalence, and segment rates; segment-difference claims require p<0.05 on a two-proportion z-test |
 | Classifier accountability | Never measured | Golden set: P/R/F1, Cohen's κ, calibration | Pipeline built and running; against the *synthetic proxy* labels (not real humans — see caveat below): stage-1 junk recall 0.93, stage-3 relevance F1 0.96, κ 0.93 — all three clear the §6 acceptance gate, but that gate hasn't been cleared against real human labels yet |
 | Traceability | None | Groundedness score via independent verifier | Implemented; every insight links to its evidence with an atomic-claim groundedness check that caps the grade at C on any unsupported claim — see the negative-control writeup below for a concrete case where that cap was the difference between B and C |
-| Freshness | One-shot | Weekly cron, emerging/decaying alerts | Workflow scaffolded in Phase 8 |
+| Freshness | One-shot | Weekly cron, emerging/decaying alerts | Implemented and run live: incremental ingest → classify-only-new → assign-or-cluster-residual → recompute prevalence/delta for every theme → regenerate insights only where prevalence moved beyond the prior CI → a Markdown digest with real alerts (a real run flagged the same out-of-band abstention rate found in Phase 3) |
 | Interrogability | Static export | RAG QnA agent with citations + refusal | Implemented and verified live: hybrid BM25+vector retrieval with RRF fusion, a refusal that actually fires on out-of-corpus questions, and all 8 mandated question packs answering with real computed n/CI — see the Phase 7 writeup below |
 
 ## Tech stack
@@ -564,6 +564,102 @@ being explicit about rather than burying:
   `1.0`) — `aisle/insights/stats.py` now clamps the interval to always
   contain the point estimate, closing the gap rather than leaving callers
   to work around it.
+
+## Architecture notes (Phase 8)
+
+- **`aisle/cluster/incremental.py`** — the weekly job's incremental
+  clustering (§12 step 4), deliberately distinct from
+  `aisle.cluster.themes.run_theme_clustering`'s full from-scratch
+  re-cluster: new documents are assigned to an existing theme when cosine
+  similarity to that theme's centroid clears `config/scoring.yaml`'s
+  `incremental_assign_cosine_threshold` (0.8); the unassigned residual is
+  clustered with the same UMAP+HDBSCAN pass Phase 4 uses, and any resulting
+  cluster that clears `min_cluster_size` becomes a new theme. Existing
+  themes are **updated in place** (same `id`, `run_id` bumped forward)
+  rather than re-inserted every run — every current theme's prevalence/CI/
+  delta gets recomputed against the grown corpus, not just the ones that
+  received new members, since the denominator moved for everyone.
+- **`aisle/jobs/weekly.py`** — chains incremental ingest (per-source
+  failure isolation already built into `aisle.ingest.runner` since Phase
+  2) → classify-only-new (already idempotent since Phase 3) → incremental
+  clustering → insight regeneration **only for themes that are brand new
+  or whose prevalence moved outside the prior run's CI** → alert detection
+  (new theme crossing 3% prevalence, >50% relative week-over-week move,
+  any ingestion error, an abstention-rate or cost anomaly) → a rendered
+  Markdown digest → an optional webhook post (honestly reports
+  `digest_webhook_sent: false` rather than pretending, when
+  `AISLE_DIGEST_WEBHOOK_URL` isn't set). Every stage's own idempotency is
+  what makes the whole job resumable — there's no separate checkpoint/
+  resume mechanism because none is needed.
+- **`.github/workflows/weekly.yml`** — the production cron (Sunday 20:30
+  UTC = Monday 02:00 IST), plus `workflow_dispatch` for on-demand runs. A
+  Postgres+pgvector service container gives it a real, empty database each
+  run. Runs in `MOCK_MODE` out of the box (so it works end-to-end on a
+  cold fork with zero secrets, per §14's checkpoint) and switches to real
+  mode automatically the moment an `ANTHROPIC_API_KEY` repo secret exists.
+- **`aisle/jobs/scheduler.py`** — the local-dev APScheduler equivalent of
+  the same schedule, for exercising the weekly job without a deployed
+  Action.
+- **Verified with a real run, not just tests**: uploaded 3 new documents,
+  ran `python -m aisle.jobs.weekly`, and got a genuine digest — 3
+  documents classified, all 7 current themes' prevalence recomputed
+  against the larger corpus (each shifted down slightly, correctly marked
+  `stable` since the shift was small), and one real alert (the abstention
+  rate outside its target band, the same finding from Phase 3, now
+  surfacing automatically as a routine weekly check instead of something
+  you'd only notice by reading the README).
+
+## Deployment
+
+Per the brief's tech stack: frontend on **Vercel**, API on
+**Railway/Render**, DB on **Supabase** (Postgres + pgvector). Not exercised
+in this sandbox (no accounts/tokens here) — these are the steps to actually
+deploy it:
+
+1. **Database (Supabase)**: create a project, enable the `vector` extension
+   (Database → Extensions → `vector`), then run
+   `python -m aisle.db.migrate` against its connection string once.
+2. **API (Railway/Render)**: deploy `backend/` (the `Dockerfile` is ready —
+   build context is the repo root, `dockerfile: backend/Dockerfile`,
+   matching `docker-compose.yml`). Set `DATABASE_URL` to the Supabase
+   connection string, `ANTHROPIC_API_KEY`, `MOCK_MODE=false`,
+   `MOCK_LLM=false`, and the other `.env.example` values.
+3. **Frontend (Vercel)**: import `frontend/` as the project root, set
+   `NEXT_PUBLIC_AISLE_API_URL` to the deployed API's URL.
+4. **Weekly cron**: `.github/workflows/weekly.yml` already targets
+   whichever `DATABASE_URL`/`ANTHROPIC_API_KEY` are set as repo secrets —
+   point them at the same Supabase/Anthropic credentials as the deployed
+   API and the schedule runs against the real, deployed database.
+
+### Honesty caveats (Phase 8)
+
+- **Deployment itself was not exercised.** This sandbox has no Vercel/
+  Railway/Supabase accounts to actually deploy to. The steps above are
+  reviewed against the existing `Dockerfile`/`docker-compose.yml`/env-var
+  contract, not run end-to-end against real hosting.
+- **The GitHub Actions workflow has not been run by GitHub itself** — it
+  was authored and reviewed against the exact commands verified locally
+  (`aisle.db.migrate`, `aisle.ingest.generate_synthetic_corpus`,
+  `aisle.db.seed`, `aisle.jobs.weekly`), but this sandbox cannot trigger a
+  real Actions run to confirm the YAML itself is free of typos. Worth
+  triggering `workflow_dispatch` manually once this reaches GitHub to
+  confirm.
+- **Insight regeneration on a moved theme always inserts a new insight
+  row** rather than updating the prior one in place — consistent with how
+  every other run-scoped table in this schema works (themes, too, get a
+  fresh row's worth of updated stats each run via `run_id`), but it does
+  mean `/insights` accumulates one row per theme per week it moved, not a
+  single evolving row. Reasonable at this corpus's scale; would want
+  explicit versioning/superseding at a much larger one.
+- **"Recompute IQS for all active insights" (§12 step 7) is satisfied by
+  regeneration, not a cheaper in-place recompute.** An insight only gets a
+  fresh IQS when its theme is new or moved beyond its prior CI (which
+  re-drafts, re-adversarial-passes, and re-verifies it end to end) —
+  insights whose theme didn't move keep their existing IQS rather than
+  paying for a from-scratch verification pass that would very likely
+  reproduce the same numbers. Documented rather than implemented as a
+  separate lightweight recompute path, given the marginal value at this
+  corpus's size.
 
 ## Known limitations / honesty notes
 
