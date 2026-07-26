@@ -31,7 +31,7 @@ state:
 | 2 — Ingestion | ✅ Done, verified |
 | 3 — PM-Gate | ✅ Done, verified (see honesty caveat below — metrics are against a synthetic proxy, not real human labels) |
 | 4 — Themes | ✅ Done, verified (see honesty caveat below — embeddings use a deterministic local fallback, not the real sentence-transformer model) |
-| 5 — Insights + IQS | ⬜ Not started |
+| 5 — Insights + IQS | ✅ Done, verified (negative-control experiment run for real — see honesty caveats below) |
 | 6 — Frontend | ⬜ Not started |
 | 7 — QnA agent | ⬜ Not started |
 | 8 — Cron + deploy | ⬜ Not started |
@@ -65,9 +65,9 @@ weekly GitHub Action once repo secrets are set.
 | Axis | ReviewLens (Spotify) | AISLE target | AISLE current (synthetic seed run) |
 |---|---|---|---|
 | Corpus depth | 166 discovery-relevant from 5,000 fetched | ≥3,000 from ≥25,000 | 570 synthetic docs ingested (real-run number pending live credentials) |
-| Statistical honesty | Naked percentages, no denominator | Every number ships `n`, denominator, Wilson 95% CI | Implemented in `aisle.insights.stats` (Phase 5) |
+| Statistical honesty | Naked percentages, no denominator | Every number ships `n`, denominator, Wilson 95% CI | Implemented in `aisle.insights.stats`; used for theme prevalence, insight prevalence, and segment rates; segment-difference claims require p<0.05 on a two-proportion z-test |
 | Classifier accountability | Never measured | Golden set: P/R/F1, Cohen's κ, calibration | Pipeline built and running; against the *synthetic proxy* labels (not real humans — see caveat below): stage-1 junk recall 0.93, stage-3 relevance F1 0.96, κ 0.93 — all three clear the §6 acceptance gate, but that gate hasn't been cleared against real human labels yet |
-| Traceability | None | Groundedness score via independent verifier | Pending Phase 5 |
+| Traceability | None | Groundedness score via independent verifier | Implemented; every insight links to its evidence with an atomic-claim groundedness check that caps the grade at C on any unsupported claim — see the negative-control writeup below for a concrete case where that cap was the difference between B and C |
 | Freshness | One-shot | Weekly cron, emerging/decaying alerts | Workflow scaffolded in Phase 8 |
 | Interrogability | Static export | RAG QnA agent with citations + refusal | Pending Phase 7 |
 
@@ -320,6 +320,110 @@ uvicorn aisle.api.main:app --reload   # http://localhost:8000/health
 - **Stability ARI (0.51) is moderate, not strong**, consistent with the
   hashing embedding's cruder notion of similarity — expect this to improve
   once real sentence embeddings are in use.
+
+## Architecture notes (Phase 5)
+
+- **`aisle/insights/generate.py`** — one insight per theme (not theme
+  *pairs* — see caveat below): assembles an evidence pack
+  (`aisle/insights/evidence.py`: exemplar/medoid documents first, then a
+  random sample of the rest, capped at 30 given this corpus's actual
+  per-theme size), drafts a title/statement/so_what/opportunity/segments/
+  categories from that evidence only — with the theme's exact
+  doc_count/doc_total/prevalence/CI numbers *injected into the prompt* so
+  the model states them, rather than risking it recomputing or hallucinating
+  them — then runs an **isolated adversarial pass**
+  (`run_adversarial_pass`, no access to the draft, only the raw evidence)
+  and an **independent verifier pass** (`run_verification`: decomposes the
+  statement+so_what into atomic claims and checks each against the
+  evidence, plus rubric-scores actionability and novelty).
+- **Segment-difference testing** (§7/§8): `_segment_stats` computes each
+  segment's *within-cohort* rate (of all relevance-eligible documents in
+  that segment, what fraction land in this theme) with a Wilson CI, and
+  runs a two-proportion z-test between the two largest segments — the
+  z/p-value is only surfaced when `p < 0.05`, never asserted on vibes.
+- **`aisle/insights/iqs.py`** — all seven §9 components, weights from
+  `config/scoring.yaml`: groundedness (supported/total atomic claims),
+  evidence volume (log-scaled against corpus size), statistical precision
+  (inverse Wilson-CI width), source triangulation (Shannon entropy over the
+  source distribution, normalised by the corpus's actual source count),
+  temporal stability (full credit if matched to a prior run, half credit if
+  only bootstrap-stable, computed literally as a 200-resample bootstrap of
+  the CI per §9), actionability and novelty (from the verifier's rubric
+  scores). **Any unsupported claim caps the letter grade at C regardless of
+  the numeric total** — this is not decorative; see the negative-control
+  writeup below, where it's the actual reason a majority-fabricated theme
+  didn't land a B.
+- **`aisle/eval/negative_control.py`** — the §9 negative-control experiment.
+  It is the *only* module permitted to read `meta_json.negative_control`,
+  and only after generation, to grade the pipeline's own output — nothing
+  in classify/cluster/insight-generation ever looks at that flag (verified
+  by code review: grep the whole `classify/`, `cluster/`, `insights/`
+  packages for `negative_control` and the only hits are this file and the
+  corpus generator).
+
+### The negative-control result (run this yourself: `python -m aisle.eval.negative_control` after a cluster+insight run)
+
+The 50 fabricated "hidden discovery tax" reviews (near-identical template,
+brand/category substituted, spread across all three brands) clustered into
+their own theme, as expected given how templated they are: **63-document
+theme, 79.4% of it fabricated**. The pipeline generated an insight from it
+like any other theme — titled from its (slightly incoherent, mock-generated)
+top terms "Tax / Surcharge / Discovery" — and scored it:
+
+```
+raw weighted IQS total: 74  (novelty 10/10, groundedness 16.67/25,
+                              actionability 10/10, evidence_volume 11.07/15,
+                              source_triangulation 8.83/15,
+                              statistical_precision 12.07/15,
+                              temporal_stability 5/10)
+grade before the unsupported-claim cap: B
+grade actually assigned:                 C   ← the cap fired
+```
+
+**Verdict: PASS, but narrowly, and for a specific reason worth stating
+plainly.** The raw weighted score alone — evidence volume, triangulation,
+precision, novelty, actionability all computed exactly as specified — adds
+up to a *passing B grade* for a theme that is 79% fabricated. What actually
+kept it off the insights list at grade A/B was the "any unsupported claim
+caps the grade at C" rule: the independent verifier didn't find full
+support for every atomic claim in the drafted statement. That rule is doing
+real, load-bearing work here, not just a formality — remove it and this
+specific negative control would have failed. Two follow-on findings worth
+being explicit about rather than burying:
+
+- **Source triangulation (8.83/15) rewarded the fabricated theme more than
+  it should have** — the 50 injected reviews were spread evenly across all
+  three brands on purpose (to look like a real cross-brand category
+  problem), and the entropy-based triangulation score has no way to tell
+  "genuinely independent reports from three brands" apart from "the same
+  fabricated template posted under three brand labels." This is a real gap
+  in the §9 formula as specified, not a bug in this implementation of it —
+  flagging it is the point of running the experiment.
+- **The mock novelty heuristic (10/10) is too easily satisfied** — it scores
+  novelty from how many distinct categories/codes an evidence pack
+  references, which the fabricated theme has plenty of (it varies category
+  per review) despite the underlying claim being obviously suspicious to a
+  human reader. A real Claude call asked "would a PM already know this
+  without research" would very plausibly flag a "hidden discovery tax" as
+  implausible-sounding, not novel-and-credible; this mock heuristic doesn't
+  capture that distinction. Another honest gap, not smoothed over.
+
+### Honesty caveats (Phase 5)
+
+- **One insight per theme, not theme *pairs*.** §8 explicitly calls out
+  theme-pair interaction insights as where non-obvious findings live. Doing
+  that well needs enough per-pair evidence to be worth drafting from, which
+  this corpus's per-theme sizes (21–74 docs) don't comfortably support —
+  scoped out rather than generating hollow pair insights just to check the
+  box.
+- **The two gaps described in the negative-control writeup above
+  (triangulation rewarding coordinated-looking spread, novelty conflating
+  category variety with genuine surprise) are real weaknesses in the
+  current scoring implementation**, most visible under MOCK_LLM's
+  heuristic verifier/novelty scorer. A real Claude call for the
+  adversarial/verification passes would likely do better at both — worth
+  re-running this exact experiment once real credentials are available, to
+  see whether it's a mock-only artifact or a genuine formula gap.
 
 ## Known limitations / honesty notes
 
