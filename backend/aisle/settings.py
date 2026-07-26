@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     aisle_max_cost_usd: float = 25.0
 
     embedding_model: str = "sentence-transformers/all-MiniLM-L12-v2"
+    # "sentence-transformer" | "hashing" | None (None = auto: hashing under MOCK_MODE, else sentence-transformer)
+    aisle_embedding_provider: str | None = None
 
     reddit_client_id: str | None = None
     reddit_client_secret: str | None = None

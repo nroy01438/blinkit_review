@@ -30,7 +30,7 @@ state:
 | 1 — Skeleton | ✅ Done, verified |
 | 2 — Ingestion | ✅ Done, verified |
 | 3 — PM-Gate | ✅ Done, verified (see honesty caveat below — metrics are against a synthetic proxy, not real human labels) |
-| 4 — Themes | ⬜ Not started |
+| 4 — Themes | ✅ Done, verified (see honesty caveat below — embeddings use a deterministic local fallback, not the real sentence-transformer model) |
 | 5 — Insights + IQS | ⬜ Not started |
 | 6 — Frontend | ⬜ Not started |
 | 7 — QnA agent | ⬜ Not started |
@@ -253,6 +253,73 @@ uvicorn aisle.api.main:app --reload   # http://localhost:8000/health
   reflects the mock's calibration, not a conclusion about the rubric. It
   will need to be re-measured once run against a real LLM; per §15, this
   was deliberately *not* tuned to hit the target band artificially.
+
+## Architecture notes (Phase 4)
+
+- **`aisle/cluster/embed.py`** — an `EmbeddingProvider` interface (per the
+  brief's tech-stack table) with two implementations: the real
+  `SentenceTransformerEmbeddingProvider` (`all-MiniLM-L12-v2`, 384-dim,
+  lazy-imported so it's never touched under the fallback) and a
+  deterministic `HashingEmbeddingProvider` — see the honesty caveat below.
+  `embed_pending_documents()` embeds every non-junk, non-dupe,
+  relevance-eligible document without an `embeddings` row yet; idempotent.
+- **`aisle/cluster/themes.py`** — embed → UMAP (`n_neighbors=15,
+  min_dist=0.0`, reduced to 5 components for clustering, not 2 — 2D is a
+  visualization concern for Phase 6, not the clustering input) → HDBSCAN
+  (`min_cluster_size = max(15, 0.5% of corpus)`) → c-TF-IDF top terms per
+  cluster (`aisle/cluster/terms.py`, BERTopic-style: each cluster's
+  concatenated text is one "class document") → 8 nearest-to-centroid medoid
+  documents → LLM names the theme grounded *only* in those terms+medoids →
+  a merge pass (union-find over cluster pairs whose centroid cosine
+  similarity clears 0.85, each pair adjudicated by the LLM/mock rather than
+  merged automatically) → best-effort keyword-overlap mapping onto
+  `taxonomy/themes.yaml` (≥2 overlapping tokens, else `status='new'`) →
+  Wilson 95% CI on prevalence (`aisle/insights/stats.py`, shared with
+  Phase 5) → source/brand/segment/category splits folded into the single
+  `source_spread_json` column (the schema has one JSONB slot for all four)
+  → week-over-week delta against the same `taxonomy_node` (or, failing
+  that, exact label match) from the most recent prior run.
+- **`aisle/cluster/stability.py`** — re-clusters the same embeddings at 3
+  seeds (`config/scoring.yaml`'s `clustering.stability.seeds`) and reports
+  the mean Adjusted Rand Index across every seed pair, stored on
+  `themes.stability_ari`.
+- Verified end-to-end against the classified Phase-3 corpus (279 eligible
+  documents after the relevance floor): **5 themes, 16.9% HDBSCAN noise**
+  (well under the §7 25% alert threshold), **mean stability ARI 0.51**
+  (moderate — see caveat below), 3 of 5 themes mapped onto a
+  `taxonomy/themes.yaml` node automatically, and a second run correctly
+  marked the taxonomy-matched themes `stable` with `delta_vs_prev_run≈0`
+  instead of `new`.
+
+### Honesty caveats (Phase 4)
+
+- **Embeddings use a deterministic local fallback, not the real model.**
+  This sandbox has no network egress to Hugging Face to download
+  `all-MiniLM-L12-v2` (confirmed: the download attempt was declined).
+  `HashingEmbeddingProvider` projects word-bigram hashes into the same
+  384-dim space via fixed per-token random directions — cosine similarity
+  under it is a crude proxy for lexical overlap, not semantic similarity.
+  It clusters this corpus sensibly (the synthetic templates share a lot of
+  literal vocabulary), but it will **not** generalise to paraphrased real
+  reviews the way a real sentence embedding would. `get_embedding_provider()`
+  switches to the real model automatically the moment `MOCK_MODE=false` or
+  `AISLE_EMBEDDING_PROVIDER=sentence-transformer` is set — no code change
+  needed, just re-embed (`embeddings` rows are keyed by `model_name`, so old
+  hashing-based vectors and new real ones don't collide).
+- **Cross-run theme identity for un-mapped themes is fragile.** When a
+  theme's `taxonomy_node` is `null` (`status='new'`), matching it to "the
+  same theme" in a later run falls back to an exact label-string match —
+  and the mock namer's label is just its top-3 c-TF-IDF terms, which can
+  reorder slightly between runs even when the underlying document grouping
+  is effectively unchanged (observed directly: a 63-document cluster kept
+  an identical size and prevalence across two consecutive runs but got two
+  different labels, so it was recorded as `new` twice instead of `stable`
+  once). The fix is to match on centroid cosine similarity across runs
+  instead of label text; not implemented yet — documented rather than
+  quietly left to look more stable than it is.
+- **Stability ARI (0.51) is moderate, not strong**, consistent with the
+  hashing embedding's cruder notion of similarity — expect this to improve
+  once real sentence embeddings are in use.
 
 ## Known limitations / honesty notes
 
