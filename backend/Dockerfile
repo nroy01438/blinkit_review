@@ -7,8 +7,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends gcc curl && rm -rf /var/lib/apt/lists/*
-
+# No apt-get/gcc layer: every package in requirements.txt — including the
+# ones most likely to need a C extension build (hdbscan, umap-learn's
+# pynndescent/llvmlite, scikit-learn, scipy, torch via sentence-transformers)
+# — ships a prebuilt cp311-manylinux wheel, verified with
+# `pip download --only-binary=:all: -r backend/requirements.txt`. The one
+# package without a wheel (langdetect) is pure Python, so its sdist build
+# needs no compiler either. curl was likewise unused: no HEALTHCHECK or
+# runtime code in this image shells out to it. Dropping this layer removes
+# the exact RUN step that was OOM-killing/crashing the Railway build.
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
