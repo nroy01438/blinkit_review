@@ -29,9 +29,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://aisle:aisle@localhost:5433/aisle_dev"
 
-    anthropic_api_key: str | None = None
-    aisle_bulk_model: str = "claude-sonnet-5"
-    aisle_synth_model: str = "claude-opus-5"
+    groq_api_key: str | None = None
+    # Bulk classification model — fast/cheap, used for the high-volume PM-Gate stages.
+    aisle_bulk_model: str = "llama-3.1-8b-instant"
+    # Stronger model for synthesis (theme naming, insight drafting/adversarial/verification).
+    aisle_synth_model: str = "llama-3.3-70b-versatile"
     aisle_max_cost_usd: float = 25.0
 
     embedding_model: str = "sentence-transformers/all-MiniLM-L12-v2"

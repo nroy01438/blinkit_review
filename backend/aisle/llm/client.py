@@ -1,10 +1,20 @@
-"""The ONLY place in the codebase that may call the Anthropic API.
+"""The ONLY place in the codebase that may call the Groq API.
 
 Every caller goes through `LLMClient.complete_json()`: content-hash cache
 lookup, cost-guardrail check, the actual call (or a deterministic mock),
 strict Pydantic schema validation with a single corrective retry, and —
 on repeated failure — a row in `needs_human_review` instead of a silent
 coercion or a crash.
+
+Originally written against the Anthropic API (the brief's specified
+stack); switched to Groq because that's the key actually available for
+this deployment. Groq's chat-completions endpoint is OpenAI-shaped
+(`chat.completions.create`, `resp.choices[0].message.content`,
+`resp.usage.prompt_tokens`/`completion_tokens`) rather than Anthropic's
+`messages.create`/`resp.content`/`input_tokens`/`output_tokens` shape —
+that's the only real difference `_real_call` below has to bridge. Every
+other stage in the codebase calls `complete_json()` and never touches a
+provider SDK directly, which is the whole point of centralising this here.
 """
 from __future__ import annotations
 
@@ -18,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from aisle.db.connection import get_conn
 from aisle.llm.cache import content_hash, get_cached, put_cache
 from aisle.llm.cost import CostTracker, MaxCostExceededError
-from aisle.settings import get_settings
+from aisle.settings import MissingConfigError, get_settings
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -43,16 +53,16 @@ class LLMClient:
     def __init__(self, cost_tracker: CostTracker | None = None):
         self.settings = get_settings()
         self.cost_tracker = cost_tracker or CostTracker(max_cost_usd=self.settings.aisle_max_cost_usd)
-        self._anthropic = None
+        self._groq = None
 
     @property
-    def anthropic(self):
-        if self._anthropic is None:
-            import anthropic
+    def groq(self):
+        if self._groq is None:
+            import groq
 
-            api_key = self.settings.require("anthropic_api_key")
-            self._anthropic = anthropic.Anthropic(api_key=api_key)
-        return self._anthropic
+            api_key = self.settings.require("groq_api_key")
+            self._groq = groq.Groq(api_key=api_key)
+        return self._groq
 
     def complete_json(
         self,
@@ -149,15 +159,20 @@ class LLMClient:
         last_exc: Exception | None = None
         for attempt in range(MAX_API_RETRIES):
             try:
-                resp = self.anthropic.messages.create(
+                resp = self.groq.chat.completions.create(
                     model=model,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                text = "".join(block.text for block in resp.content if block.type == "text")
+                text = resp.choices[0].message.content or ""
                 raw = _extract_json(text)
-                return raw, resp.usage.input_tokens, resp.usage.output_tokens
+                return raw, resp.usage.prompt_tokens, resp.usage.completion_tokens
+            except MissingConfigError:
+                # a missing GROQ_API_KEY won't fix itself between retries —
+                # fail immediately instead of sleeping through 4 pointless
+                # attempts before reporting the same configuration error.
+                raise
             except Exception as e:  # noqa: BLE001 - broad on purpose, we retry+backoff any transient failure
                 last_exc = e
                 if attempt < MAX_API_RETRIES - 1:
@@ -178,7 +193,7 @@ class LLMClient:
 
 
 def _extract_json(text: str) -> dict:
-    """Anthropic responses may wrap JSON in prose or a code fence; find the
+    """Responses may wrap JSON in prose or a code fence; find the
     outermost {...} block rather than assuming the whole message is JSON.
     """
     start = text.find("{")

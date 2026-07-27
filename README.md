@@ -40,10 +40,23 @@ state:
 live source of truth, not the prior-art comparison table below, which fills
 in once a full run exists.**
 
+## LLM provider: Groq, not Anthropic
+
+The original brief specifies Anthropic Claude throughout. This deployment
+runs on **Groq** instead (`llama-3.1-8b-instant` for bulk classification,
+`llama-3.3-70b-versatile` for synthesis/verification) because that's the
+API key actually available for it — see `GROQ_API_KEY` in `.env.example`
+and the swap documented in `aisle/llm/client.py`'s docstring. Nothing
+outside `aisle/llm/client.py` needed to change: every other stage in the
+codebase calls `LLMClient.complete_json()` and never touches a provider
+SDK directly, which is the whole point of centralising provider access
+there. Swapping back to Anthropic (or to any other OpenAI-compatible
+provider) is a change to that one file, not a refactor.
+
 ## Important caveat: synthetic seed corpus
 
 This build was produced in a sandboxed environment with **no live API keys**
-(Anthropic, Reddit) and **no scraping egress** to Play Store / App Store /
+(Groq, Reddit) and **no scraping egress** to Play Store / App Store /
 Reddit. Rather than silently fake the corpus-depth numbers, every number
 in this README that would normally come from a real run is instead computed
 against a **documented synthetic seed corpus**
@@ -75,10 +88,11 @@ weekly GitHub Action once repo secrets are set.
 
 Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui + Recharts
 frontend; Python 3.11 + FastAPI + Pydantic v2 backend; Postgres + pgvector;
-Claude for classification/synthesis (`claude-sonnet-5` by default — the
-brief's `claude-sonnet-4-6` is not a real callable model id); local
-sentence-transformers embeddings; UMAP + HDBSCAN clustering; hybrid BM25 +
-pgvector retrieval fused with RRF.
+Groq for classification/synthesis (`llama-3.1-8b-instant` for bulk
+classification, `llama-3.3-70b-versatile` for synthesis — the brief's
+original stack specified Anthropic Claude, see the provider-swap note
+above); local sentence-transformers embeddings; UMAP + HDBSCAN clustering;
+hybrid BM25 + pgvector retrieval fused with RRF.
 
 ## Repo layout
 
@@ -153,7 +167,7 @@ which call the same code synchronously over HTTP.
   fails loudly with a readable error instead of silently defaulting when a
   key is missing; `MOCK_MODE`/`MOCK_LLM` are the documented way to run
   without any external credentials at all.
-- **`aisle/llm/client.py`** — the *only* place the Anthropic API may be
+- **`aisle/llm/client.py`** — the *only* place the Groq API may be
   called from. Every call goes through `complete_json()`: content-hash cache
   lookup (`llm_cache` table) → cost-guardrail check against `--max-cost-usd`
   → the real call (retried with exponential backoff) or a deterministic mock
@@ -418,7 +432,7 @@ being explicit about rather than burying:
   novelty from how many distinct categories/codes an evidence pack
   references, which the fabricated theme has plenty of (it varies category
   per review) despite the underlying claim being obviously suspicious to a
-  human reader. A real Claude call asked "would a PM already know this
+  human reader. A real Groq call asked "would a PM already know this
   without research" would very plausibly flag a "hidden discovery tax" as
   implausible-sounding, not novel-and-credible; this mock heuristic doesn't
   capture that distinction. Another honest gap, not smoothed over.
@@ -435,7 +449,7 @@ being explicit about rather than burying:
   (triangulation rewarding coordinated-looking spread, novelty conflating
   category variety with genuine surprise) are real weaknesses in the
   current scoring implementation**, most visible under MOCK_LLM's
-  heuristic verifier/novelty scorer. A real Claude call for the
+  heuristic verifier/novelty scorer. A real Groq call for the
   adversarial/verification passes would likely do better at both — worth
   re-running this exact experiment once real credentials are available, to
   see whether it's a mock-only artifact or a genuine formula gap.
@@ -532,14 +546,16 @@ being explicit about rather than burying:
 
 ### Honesty caveats (Phase 7)
 
-- **Tool selection is rule-based, not a free-form Claude tool-use loop.**
+- **Tool selection is rule-based, not a free-form Groq tool-use loop.**
   Under `MOCK_LLM` there is no real model choosing when to call which tool,
   so a genuine agentic loop would have nothing authentic driving it in this
   environment. The rules in `_decide_tools` are a legible stand-in for the
   same signals a real tool-use loop would act on (segment names, filter
   keywords, explicit references) — every tool underneath is real and
-  independently callable, so swapping in an actual Anthropic tool-use loop
-  later is a change to *how tools get selected*, not to what they do.
+  independently callable, so swapping in an actual Groq tool-calling loop
+  (Groq's chat-completions API supports `tools`/`tool_choice`, same shape
+  as OpenAI's) later is a change to *how tools get selected*, not to what
+  they do.
 - **No real multi-turn context threading server-side.** "Conversation
   memory" is implemented client-side (`app/ask/page.tsx` keeps the thread
   and exports it as a Markdown research note); each question still hits
@@ -596,7 +612,7 @@ being explicit about rather than burying:
   Postgres+pgvector service container gives it a real, empty database each
   run. Runs in `MOCK_MODE` out of the box (so it works end-to-end on a
   cold fork with zero secrets, per §14's checkpoint) and switches to real
-  mode automatically the moment an `ANTHROPIC_API_KEY` repo secret exists.
+  mode automatically the moment an `GROQ_API_KEY` repo secret exists.
 - **`aisle/jobs/scheduler.py`** — the local-dev APScheduler equivalent of
   the same schedule, for exercising the weekly job without a deployed
   Action.
@@ -622,13 +638,13 @@ deploy it:
 2. **API (Railway/Render)**: deploy `backend/` (the `Dockerfile` is ready —
    build context is the repo root, `dockerfile: backend/Dockerfile`,
    matching `docker-compose.yml`). Set `DATABASE_URL` to the Supabase
-   connection string, `ANTHROPIC_API_KEY`, `MOCK_MODE=false`,
+   connection string, `GROQ_API_KEY`, `MOCK_MODE=false`,
    `MOCK_LLM=false`, and the other `.env.example` values.
 3. **Frontend (Vercel)**: import `frontend/` as the project root, set
    `NEXT_PUBLIC_AISLE_API_URL` to the deployed API's URL.
 4. **Weekly cron**: `.github/workflows/weekly.yml` already targets
-   whichever `DATABASE_URL`/`ANTHROPIC_API_KEY` are set as repo secrets —
-   point them at the same Supabase/Anthropic credentials as the deployed
+   whichever `DATABASE_URL`/`GROQ_API_KEY` are set as repo secrets —
+   point them at the same Supabase/Groq credentials as the deployed
    API and the schedule runs against the real, deployed database.
 
 ### Honesty caveats (Phase 8)

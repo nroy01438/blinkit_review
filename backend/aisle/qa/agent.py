@@ -7,12 +7,13 @@ plus those computed numbers — never in the model's own arithmetic.
 Tool selection here is rule-based, not a free-form agentic loop: given this
 runs under MOCK_LLM in this environment, a real multi-turn tool-call loop
 would have nothing genuine driving its choices anyway. The rules below are
-a deliberately legible stand-in for what a real Claude tool-use loop would
+a deliberately legible stand-in for what a real tool-calling loop would
 decide from the same signals (segment names, filter keywords, an explicit
-theme/insight reference) — swap `_decide_tools` for a real Anthropic
-tool-use loop against `aisle.qa.tools` once real credentials exist; every
-tool function underneath is already real and independently callable either
-way.
+theme/insight reference) — swap `_decide_tools` for a real Groq
+tool-calling loop (Groq's chat-completions API supports `tools`/
+`tool_choice`, same shape as OpenAI's) against `aisle.qa.tools` once real
+credentials exist; every tool function underneath is already real and
+independently callable either way.
 """
 from __future__ import annotations
 

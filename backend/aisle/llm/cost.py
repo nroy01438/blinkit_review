@@ -9,13 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 PRICING_PER_1K_TOKENS_USD = {
-    "claude-sonnet-5": {"input": 0.003, "output": 0.015},
-    "claude-opus-5": {"input": 0.015, "output": 0.075},
-    "claude-haiku-4-5-20251001": {"input": 0.001, "output": 0.005},
+    "llama-3.1-8b-instant": {"input": 0.00005, "output": 0.00008},
+    "llama-3.3-70b-versatile": {"input": 0.00059, "output": 0.00079},
     # mock model used by MockResponder — always free.
     "mock": {"input": 0.0, "output": 0.0},
 }
-DEFAULT_PRICE = {"input": 0.003, "output": 0.015}
+DEFAULT_PRICE = {"input": 0.00059, "output": 0.00079}
 
 
 class MaxCostExceededError(RuntimeError):

@@ -1,7 +1,11 @@
+import time
+
+import pytest
 from pydantic import BaseModel
 
 from aisle.llm.client import LLMClient
 from aisle.llm.cost import CostTracker
+from aisle.settings import MissingConfigError, get_settings
 
 
 class Verdict(BaseModel):
@@ -50,3 +54,19 @@ def test_validation_failure_retries_then_flags_for_human_review():
     assert result.parsed is None
     assert result.needs_human_review is True
     assert result.error is not None
+
+
+def test_missing_groq_api_key_fails_fast_without_retrying(monkeypatch):
+    """A missing GROQ_API_KEY can't be fixed by retrying — this must raise
+    immediately (MissingConfigError propagated from `_real_call`), not sleep
+    through MAX_API_RETRIES exponential-backoff attempts (~10s) before
+    reporting the same configuration error wrapped in a generic RuntimeError.
+    """
+    monkeypatch.setattr(get_settings(), "mock_llm", False, raising=False)
+    client = LLMClient(cost_tracker=CostTracker(max_cost_usd=10.0))
+
+    start = time.monotonic()
+    with pytest.raises(MissingConfigError):
+        client.complete_json(prompt="anything", response_model=Verdict, prompt_version="v1")
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0, f"took {elapsed:.1f}s — looks like it retried instead of failing fast"
