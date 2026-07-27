@@ -100,7 +100,9 @@ hybrid BM25 + pgvector retrieval fused with RRF.
 .
 ├── config/            # scoring.yaml, sources.yaml, question_packs.yaml
 ├── taxonomy/           # codes.yaml, themes.yaml (controlled vocabularies)
-├── prompts/            # every prompt versioned as <name>/v1.md, v2.md...
+├── prompts/            # NOT populated — see prompts/README.md: every
+│                         # prompt is actually an inline, versioned Python
+│                         # string constant, not an external .md file
 ├── data/samples/        # synthetic seed corpus (see caveat above)
 ├── backend/aisle/       # Python package: ingest, classify, cluster,
 │                         # insights, qa, llm, eval, jobs, api
