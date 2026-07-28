@@ -648,6 +648,13 @@ deploy it:
    whichever `DATABASE_URL`/`GROQ_API_KEY` are set as repo secrets —
    point them at the same Supabase/Groq credentials as the deployed
    API and the schedule runs against the real, deployed database.
+5. **First real ingest**: a fresh database is empty — every dashboard
+   screen shows zeros until something is fetched. Open `/admin` and
+   click **"Ingest (live — fetch real reviews)"** (or **"Run full
+   pipeline"** to also classify/cluster/generate insights in one go).
+   The old dry-run button only ever previewed what *would* be fetched
+   and never wrote to the database — it's kept as a preview, but it's
+   not what populates the corpus.
 
 ### Honesty caveats (Phase 8)
 

@@ -30,6 +30,28 @@ export default function AdminPage() {
     }
   }
 
+  async function runFullPipeline() {
+    setRunning("full-pipeline");
+    const steps: [string, string][] = [
+      ["ingest (live)", "/admin/run/ingest?dry_run=false&limit_per_source=200"],
+      ["classify", "/admin/run/classify"],
+      ["cluster", "/admin/run/cluster"],
+      ["insights", "/admin/run/insights"],
+    ];
+    const results: Record<string, any> = {};
+    try {
+      for (const [name, path] of steps) {
+        setLastResult({ name: "full-pipeline", result: { ...results, currently_running: name } });
+        results[name] = await api.post(path);
+      }
+      setLastResult({ name: "full-pipeline", result: results });
+    } catch (e) {
+      setLastResult({ name: "full-pipeline", result: results, error: String(e) });
+    } finally {
+      setRunning(null);
+    }
+  }
+
   async function loadNextLabel() {
     setLabelBusy(true);
     try {
@@ -67,11 +89,26 @@ export default function AdminPage() {
       <section>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Run pipeline stages</h2>
         <div className="flex flex-wrap gap-2">
-          <RunButton label="Ingest (dry-run)" busy={running === "ingest"} onClick={() => run("ingest", "/admin/run/ingest?dry_run=true")} />
+          <RunButton
+            label="Ingest (live — fetch real reviews)"
+            busy={running === "ingest-live"}
+            onClick={() => run("ingest-live", "/admin/run/ingest?dry_run=false&limit_per_source=200")}
+          />
+          <RunButton label="Ingest (dry-run preview)" busy={running === "ingest"} onClick={() => run("ingest", "/admin/run/ingest?dry_run=true")} />
           <RunButton label="Classify" busy={running === "classify"} onClick={() => run("classify", "/admin/run/classify")} />
           <RunButton label="Cluster" busy={running === "cluster"} onClick={() => run("cluster", "/admin/run/cluster")} />
           <RunButton label="Generate insights" busy={running === "insights"} onClick={() => run("insights", "/admin/run/insights")} />
+          <RunButton
+            label="Run full pipeline (ingest → classify → cluster → insights)"
+            busy={running === "full-pipeline"}
+            onClick={runFullPipeline}
+          />
         </div>
+        <p className="mt-2 text-xs text-slate-500">
+          A brand-new deployment starts with an empty database — every dashboard screen shows zeros until you
+          run at least &quot;Ingest (live)&quot; once. &quot;Run full pipeline&quot; does ingest → classify →
+          cluster → insights in one click.
+        </p>
         {lastResult && (
           <pre className="mt-3 max-h-80 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
             {JSON.stringify(lastResult, null, 2)}
