@@ -36,10 +36,12 @@ def resync_sources() -> dict:
 
 
 @router.post("/run/ingest")
-def run_ingest(dry_run: bool = False, limit_per_source: int = 100) -> dict:
+def run_ingest(dry_run: bool = False, limit_per_source: int = 100, ignore_watermark: bool = False) -> dict:
     from aisle.ingest.runner import run_ingestion
 
-    return run_ingestion(trigger="manual", limit_per_source=limit_per_source, dry_run=dry_run)
+    return run_ingestion(
+        trigger="manual", limit_per_source=limit_per_source, dry_run=dry_run, ignore_watermark=ignore_watermark
+    )
 
 
 @router.post("/run/classify")

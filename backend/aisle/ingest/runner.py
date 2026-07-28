@@ -31,7 +31,14 @@ def _finish_run(run_id: int, stage_stats: dict, status: str) -> None:
         conn.commit()
 
 
-def run_ingestion(*, trigger: str = "manual", limit_per_source: int = 500, dry_run: bool = False, only: str | None = None) -> dict:
+def run_ingestion(
+    *,
+    trigger: str = "manual",
+    limit_per_source: int = 500,
+    dry_run: bool = False,
+    only: str | None = None,
+    ignore_watermark: bool = False,
+) -> dict:
     run_id = _start_run(trigger)
     with get_conn() as conn:
         sources = conn.execute(
@@ -48,7 +55,8 @@ def run_ingestion(*, trigger: str = "manual", limit_per_source: int = 500, dry_r
         try:
             result = run_source_ingestion(
                 s["id"], s["name"], s["kind"], s["config_json"],
-                since=s["last_fetched_at"], limit=limit_per_source, dry_run=dry_run,
+                since=None if ignore_watermark else s["last_fetched_at"],
+                limit=limit_per_source, dry_run=dry_run,
             )
             per_source[s["name"]] = result
         except Exception as e:  # noqa: BLE001 - one bad source must not kill the run
@@ -67,10 +75,15 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--only", type=str, default=None)
     parser.add_argument("--trigger", type=str, default="manual", choices=["manual", "cron", "upload"])
+    parser.add_argument(
+        "--ignore-watermark", action="store_true",
+        help="Re-fetch from each source's start instead of only what's posted after last_fetched_at.",
+    )
     args = parser.parse_args()
 
     result = run_ingestion(
-        trigger=args.trigger, limit_per_source=args.limit_per_source, dry_run=args.dry_run, only=args.only
+        trigger=args.trigger, limit_per_source=args.limit_per_source, dry_run=args.dry_run,
+        only=args.only, ignore_watermark=args.ignore_watermark,
     )
     print(json.dumps(result, indent=2, default=str))
 

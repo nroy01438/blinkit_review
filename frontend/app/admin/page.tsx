@@ -94,6 +94,11 @@ export default function AdminPage() {
             busy={running === "ingest-live"}
             onClick={() => run("ingest-live", "/admin/run/ingest?dry_run=false&limit_per_source=500")}
           />
+          <RunButton
+            label="Ingest (live — full backfill)"
+            busy={running === "ingest-backfill"}
+            onClick={() => run("ingest-backfill", "/admin/run/ingest?dry_run=false&limit_per_source=500&ignore_watermark=true")}
+          />
           <RunButton label="Ingest (dry-run preview)" busy={running === "ingest"} onClick={() => run("ingest", "/admin/run/ingest?dry_run=true")} />
           <RunButton label="Classify" busy={running === "classify"} onClick={() => run("classify", "/admin/run/classify")} />
           <RunButton label="Cluster" busy={running === "cluster"} onClick={() => run("cluster", "/admin/run/cluster")} />
@@ -107,7 +112,11 @@ export default function AdminPage() {
         <p className="mt-2 text-xs text-slate-500">
           A brand-new deployment starts with an empty database — every dashboard screen shows zeros until you
           run at least &quot;Ingest (live)&quot; once. &quot;Run full pipeline&quot; does ingest → classify →
-          cluster → insights in one click.
+          cluster → insights in one click. Ingestion is incremental (each source remembers when it was last
+          fetched and only pulls newer reviews) — after the first run, plain &quot;Ingest (live)&quot; will
+          fetch almost nothing new. Use &quot;Ingest (live — full backfill)&quot; to re-pull each source&apos;s
+          full available history (still capped at 500/source) when you need more volume for
+          clustering/insights.
         </p>
         {lastResult && (
           <pre className="mt-3 max-h-80 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
