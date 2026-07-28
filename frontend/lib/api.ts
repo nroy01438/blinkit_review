@@ -169,6 +169,25 @@ export function fetchQuestionPacks() {
   return api.get<QuestionPack[]>("/question-packs");
 }
 
+export interface DiscoveryQuestionResult {
+  id: string;
+  question: string;
+  answer_summary: string;
+  n: number;
+  rate?: number;
+  ci_low?: number;
+  ci_high?: number;
+  successes?: number;
+  chart_data?: unknown;
+  segment_breakdown?: Record<string, number>;
+  top_quotes?: { document_id: number; quote: string; source_name: string }[];
+  generated_at: string;
+}
+
+export function fetchDiscoveryQuestions() {
+  return api.get<DiscoveryQuestionResult[]>("/discovery-questions");
+}
+
 export function runQuestionPack(id: string) {
   return api.get<Record<string, unknown>>(`/question-packs/${id}/run`);
 }

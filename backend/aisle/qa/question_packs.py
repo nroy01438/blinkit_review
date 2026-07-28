@@ -59,8 +59,13 @@ def _envelope(**kwargs) -> dict:
     return {"generated_at": datetime.now(timezone.utc).isoformat(), **kwargs}
 
 
-def q1_repeat_categories() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def _relevant(raw_corpus: list[dict] | None) -> list[dict]:
+    raw_corpus = raw_corpus if raw_corpus is not None else _corpus()
+    return [d for d in raw_corpus if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+
+
+def q1_repeat_categories(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     replenishers = [d for d in corpus if d["segment_label"] == "habitual_replenisher"]
     code_counts: dict[str, int] = {}
     for d in replenishers:
@@ -78,8 +83,8 @@ def q1_repeat_categories() -> dict:
     )
 
 
-def q2_exploration_barriers() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def q2_exploration_barriers(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     barrier_counts: dict[str, int] = {}
     barrier_docs: dict[str, list[dict]] = {}
     for d in corpus:
@@ -97,8 +102,8 @@ def q2_exploration_barriers() -> dict:
     )
 
 
-def q3_discovery_surfaces() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def q3_discovery_surfaces(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     n = len(corpus)
     counts = {}
     docs_by_surface: dict[str, list[dict]] = {}
@@ -116,8 +121,8 @@ def q3_discovery_surfaces() -> dict:
     )
 
 
-def q4_habit_role() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def q4_habit_role(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     n = len(corpus)
     habit_docs = [d for d in corpus if HABIT_LEXICON.search(d["raw_text"])]
     crosstab: dict[str, int] = {}
@@ -133,8 +138,8 @@ def q4_habit_role() -> dict:
     )
 
 
-def q5_information_gap() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def q5_information_gap(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     n = len(corpus)
     counts, docs_by_dim = {}, {}
     for dim, pattern in INFO_GAP_PATTERNS.items():
@@ -150,20 +155,24 @@ def q5_information_gap() -> dict:
     )
 
 
-def q6_frequent_frustrations() -> dict:
-    corpus = _corpus()  # includes ops bucket per §10 (include_ops_bucket: true)
+def q6_frequent_frustrations(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = raw_corpus if raw_corpus is not None else _corpus()  # includes ops bucket per §10 (include_ops_bucket: true)
     with get_conn() as conn:
-        themes = conn.execute(
-            "SELECT id, label, doc_count FROM themes WHERE run_id = (SELECT run_id FROM themes ORDER BY run_id DESC LIMIT 1)"
+        # One query for every current-run theme's avg severity instead of a
+        # round trip per theme (was N+1 — one connection+query per theme).
+        theme_rows_raw = conn.execute(
+            """
+            SELECT t.id, t.label, t.doc_count, avg(c.severity) AS avg_severity
+            FROM themes t
+            LEFT JOIN theme_documents td ON td.theme_id = t.id
+            LEFT JOIN classifications c ON c.document_id = td.document_id
+            WHERE t.run_id = (SELECT run_id FROM themes ORDER BY run_id DESC LIMIT 1)
+            GROUP BY t.id, t.label, t.doc_count
+            """
         ).fetchall()
-    theme_rows = [dict(t) for t in themes]
+    theme_rows = [dict(t) for t in theme_rows_raw]
     for t in theme_rows:
-        with get_conn() as conn:
-            avg_severity = conn.execute(
-                "SELECT avg(c.severity) AS s FROM theme_documents td JOIN classifications c ON c.document_id = td.document_id WHERE td.theme_id = %s",
-                (t["id"],),
-            ).fetchone()["s"]
-        t["avg_severity"] = float(avg_severity) if avg_severity else 3.0
+        t["avg_severity"] = float(t["avg_severity"]) if t["avg_severity"] is not None else 3.0
         t["severity_x_frequency"] = t["avg_severity"] * t["doc_count"]
 
     ops_docs = [d for d in corpus if d["is_junk"] and d["junk_reason"] == "ops_off_topic"]
@@ -177,8 +186,8 @@ def q6_frequent_frustrations() -> dict:
     )
 
 
-def q7_segment_experimentation() -> dict:
-    corpus = [d for d in _corpus() if not d["is_junk"] and d["discovery_relevance"] >= RELEVANCE_FLOOR]
+def q7_segment_experimentation(raw_corpus: list[dict] | None = None) -> dict:
+    corpus = _relevant(raw_corpus)
     n = len(corpus)
     by_segment: dict[str, list[dict]] = {}
     for d in corpus:
@@ -251,3 +260,19 @@ def run_pack(pack_id: str) -> dict:
     if pack_id not in PACK_FUNCTIONS:
         raise ValueError(f"Unknown question pack: {pack_id}")
     return PACK_FUNCTIONS[pack_id]()
+
+
+def run_all_packs() -> list[dict]:
+    """Runs all eight packs for one page load (the discovery-questions home
+    page). Fetches the classified corpus once and hands it to every pack
+    that needs it instead of each independently re-running the same
+    documents+classifications+sources join — was 6 redundant full-corpus
+    queries per call to this function.
+    """
+    raw_corpus = _corpus()
+    results = []
+    for pack in list_packs():
+        fn = PACK_FUNCTIONS[pack["id"]]
+        result = fn(raw_corpus) if fn is not q8_unmet_needs else fn()
+        results.append({"id": pack["id"], "question": pack["question"], **result})
+    return results

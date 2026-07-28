@@ -163,6 +163,18 @@ via the CLIs above (`aisle.classify.run`, `aisle.cluster.run`,
 `aisle.insights.run`) or the "Run pipeline stages" buttons on `/admin`,
 which call the same code synchronously over HTTP.
 
+**Home page redesign.** The original `/` was the pipeline-health screen
+(funnel, classifier κ/F1, calibration) — accurate, but it's engineering
+detail, not the thing a PM actually asked for. `/` is now the eight
+mandated Discovery Question Packs (§10) answered directly, in plain
+language, each with its real supporting evidence and a rate/CI where one
+applies — backed by a new `GET /discovery-questions` endpoint
+(`aisle/api/routers/qa.py`) that runs all eight packs in one call. The old
+technical page moved to `/pipeline` (linked from the home page's footer,
+and still in the nav under "Advanced") rather than being deleted — the
+accountability metrics it shows are real and still worth having, just not
+the front door.
+
 ## Architecture notes (Phase 1)
 
 - **`aisle/settings.py`** — the one place env/config is read. `Settings.require(field)`

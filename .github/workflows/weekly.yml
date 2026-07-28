@@ -10,29 +10,19 @@ on:
 jobs:
   weekly:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: aisle
-          POSTGRES_PASSWORD: aisle
-          POSTGRES_DB: aisle_dev
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U aisle -d aisle_dev"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
+    # This must run against the REAL deployed database (Supabase), not a
+    # throwaway container — a previous version of this workflow spun up its
+    # own empty local Postgres service and ran the whole pipeline against
+    # that, then deleted it when the job finished. It looked like it worked
+    # (green checkmarks every week) but never once touched production, so
+    # the live dashboard never saw any of it. DATABASE_URL/GROQ_API_KEY must
+    # be repo secrets pointing at the same Supabase/Groq credentials as the
+    # Render deployment (Settings -> Secrets and variables -> Actions).
     env:
-      DATABASE_URL: postgresql://aisle:aisle@localhost:5432/aisle_dev
-      # MOCK_MODE/MOCK_LLM default to true so this workflow runs end-to-end
-      # on a cold fork with zero secrets configured (§14's checkpoint).
-      # Set the GROQ_API_KEY repo secret (and flip these to 'false' in
-      # the "Configure real-mode" step below) to run for real.
-      MOCK_MODE: "true"
-      MOCK_LLM: "true"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      MOCK_MODE: "false"
+      MOCK_LLM: "false"
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       AISLE_MAX_COST_USD: ${{ secrets.AISLE_MAX_COST_USD || '10.00' }}
       AUTHOR_HASH_SALT: ${{ secrets.AUTHOR_HASH_SALT || 'ci-run-salt' }}
@@ -42,6 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Require production secrets
+        run: |
+          missing=()
+          [ -z "$DATABASE_URL" ] && missing+=("DATABASE_URL")
+          [ -z "$GROQ_API_KEY" ] && missing+=("GROQ_API_KEY")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing repo secret(s): ${missing[*]}. This workflow only runs against the real production database now — it will not fall back to a throwaway one, since that would silently do nothing useful. Set these under Settings -> Secrets and variables -> Actions, using the same values as the Render deployment."
+            exit 1
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -50,24 +50,11 @@ jobs:
         working-directory: backend
         run: pip install -r requirements.txt
 
-      - name: Apply schema
+      - name: Apply schema (idempotent — safe to run against an already-migrated database)
         working-directory: backend
         run: python -m aisle.db.migrate
 
-      - name: Enable real mode if credentials are configured
-        if: ${{ secrets.GROQ_API_KEY != '' }}
-        run: |
-          echo "MOCK_MODE=false" >> "$GITHUB_ENV"
-          echo "MOCK_LLM=false" >> "$GITHUB_ENV"
-
-      - name: Seed synthetic corpus (mock mode only — a cold real-mode run relies on the ingestion connectors instead)
-        if: ${{ secrets.GROQ_API_KEY == '' }}
-        working-directory: backend
-        run: |
-          python -m aisle.ingest.generate_synthetic_corpus
-          python -m aisle.db.seed
-
-      - name: Run the weekly job
+      - name: Run the weekly job against production
         working-directory: backend
         run: python -m aisle.jobs.weekly --digest-path weekly_digest.md
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from aisle.qa.agent import answer_question
-from aisle.qa.question_packs import list_packs, run_pack
+from aisle.qa.question_packs import list_packs, run_all_packs, run_pack
 
 router = APIRouter(tags=["qa"])
 
@@ -29,3 +29,12 @@ def run_question_pack(pack_id: str) -> dict:
         return run_pack(pack_id)
     except ValueError as e:
         return {"error": str(e)}
+
+
+@router.get("/discovery-questions")
+def discovery_questions() -> list[dict]:
+    """Backend for the home page: all eight mandated discovery questions,
+    each with its plain-English answer, supporting stats, and evidence
+    quotes, in one call.
+    """
+    return run_all_packs()
