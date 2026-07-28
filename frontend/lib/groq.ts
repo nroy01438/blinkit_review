@@ -19,7 +19,7 @@ interface SampleDoc {
   raw_text: string;
 }
 
-async function sampleCorpus(maxDocs: number): Promise<SampleDoc[]> {
+async function sampleCorpus(maxDocs: number, charsPerDoc: number): Promise<SampleDoc[]> {
   const rows = await sql()`
     SELECT d.raw_text, s.name AS source_name
     FROM documents d
@@ -28,52 +28,70 @@ async function sampleCorpus(maxDocs: number): Promise<SampleDoc[]> {
     ORDER BY d.posted_at DESC NULLS LAST, d.id DESC
     LIMIT ${maxDocs}
   `;
-  return rows.map((r: any, i: number) => ({ index: i, source_name: r.source_name, raw_text: String(r.raw_text).slice(0, 500) }));
+  return rows.map((r: any, i: number) => ({ index: i, source_name: r.source_name, raw_text: String(r.raw_text).slice(0, charsPerDoc) }));
 }
 
 function buildPrompt(docs: SampleDoc[]): string {
   const reviewBlock = docs.map((d) => `[${d.index}] (${d.source_name}) ${d.raw_text}`).join("\n");
   const questionList = QUESTIONS.map((q) => `"${q.id}": "${q.question}"`).join(",\n  ");
-  return `You are analyzing real customer feedback about Blinkit (a quick-commerce grocery delivery app) to help a product manager understand shopping behaviour.
+  return `Analyze real customer feedback about Blinkit (a quick-commerce grocery app) for a product manager.
 
-Here are ${docs.length} real reviews/discussions, each with an index number:
+${docs.length} real reviews, numbered:
 ${reviewBlock}
 
-Answer these questions using ONLY what's actually said in the reviews above. If the reviews don't clearly support an answer, say so honestly rather than guessing.
+Using ONLY what's said above, answer briefly (max 2 sentences each). If unsupported, say so.
 {
   ${questionList}
 }
 
-Respond with ONLY a strict JSON object shaped like this (no prose outside the JSON):
-{
-  "q1": {"answer": "one or two plain-English sentences", "quote_indices": [3, 17]},
-  "q2": {"answer": "...", "quote_indices": [...]},
-  ... one entry per question id above ...
+Respond with ONLY this JSON shape, no prose outside it:
+{"q1": {"answer": "...", "quote_indices": [3]}, "q2": {...}, ... one per question id above ...}
+
+quote_indices: up to 2 real indices from the list above whose text actually supports the answer. Never invent one.`;
 }
 
-"quote_indices" must be indices from the numbered list above (up to 3 per question) whose text actually supports that answer — never invent a quote, only reference real review indices.`;
-}
+// Groq's on-demand tier has a tokens-per-minute cap that's easy to blow past
+// with a big sample — start conservative and shrink further if the API
+// still says the request is too large, instead of just failing outright.
+const ATTEMPTS = [
+  { maxDocs: 70, charsPerDoc: 200, maxTokens: 900 },
+  { maxDocs: 35, charsPerDoc: 150, maxTokens: 700 },
+  { maxDocs: 15, charsPerDoc: 120, maxTokens: 500 },
+];
 
 export async function regenerateAnswers(): Promise<{ regenerated: number; n_reviews: number }> {
   await ensureSchema();
   if (!process.env.GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is not set — can't generate answers without it.");
   }
-  const docs = await sampleCorpus(300);
-  if (docs.length < 5) {
-    return { regenerated: 0, n_reviews: docs.length };
-  }
-
   const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  const completion = await client.chat.completions.create({
-    model: MODEL,
-    temperature: 0,
-    max_tokens: 2000,
-    messages: [{ role: "user", content: buildPrompt(docs) }],
-  });
-  const text = completion.choices[0]?.message?.content || "";
-  const parsed = extractJson(text);
 
+  let lastErr: any = null;
+  for (const { maxDocs, charsPerDoc, maxTokens } of ATTEMPTS) {
+    const docs = await sampleCorpus(maxDocs, charsPerDoc);
+    if (docs.length < 5) return { regenerated: 0, n_reviews: docs.length };
+
+    try {
+      const completion = await client.chat.completions.create({
+        model: MODEL,
+        temperature: 0,
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: buildPrompt(docs) }],
+      });
+      const text = completion.choices[0]?.message?.content || "";
+      const parsed = extractJson(text);
+      return await saveAnswers(parsed, docs);
+    } catch (e: any) {
+      lastErr = e;
+      const tooLarge = e?.status === 413 || /too large|rate_limit/i.test(String(e?.message || ""));
+      if (!tooLarge) throw e; // a real error (bad key, model down, etc.) shouldn't be retried as if it were a size problem
+      // else: try the next, smaller attempt
+    }
+  }
+  throw lastErr;
+}
+
+async function saveAnswers(parsed: any, docs: SampleDoc[]): Promise<{ regenerated: number; n_reviews: number }> {
   let regenerated = 0;
   for (const q of QUESTIONS) {
     const entry = parsed[q.id];

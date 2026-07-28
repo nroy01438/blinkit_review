@@ -9,7 +9,7 @@ export async function GET() {
   await ensureSchema();
 
   const answers = await sql()`
-    SELECT question_id, question, answer, quotes, n_reviews, generated_at
+    SELECT question_id, question, answer, quotes, kpi, n_reviews, generated_at
     FROM question_answers ORDER BY question_id
   `;
 

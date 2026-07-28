@@ -6,6 +6,7 @@ import { fetchForumPages } from "@/lib/connectors/forum";
 import { FetchedReview, SourceRow } from "@/lib/connectors/types";
 import { persistReviews } from "@/lib/persist";
 import { regenerateAnswers } from "@/lib/groq";
+import { saveKpis } from "@/lib/kpis";
 import { withTimeout } from "@/lib/withTimeout";
 
 // Vercel's default function timeout is short (10s on Hobby) — this route
@@ -56,6 +57,16 @@ export async function POST(req: Request) {
     }
   }
 
+  // KPIs are deterministic SQL counts, not an LLM call — computed and saved
+  // unconditionally so the discovery-engine numbers are never blocked by a
+  // Groq failure/rate-limit. The narrative below is best-effort on top.
+  let kpisComputed = 0;
+  try {
+    kpisComputed = Object.keys(await saveKpis()).length;
+  } catch (e: any) {
+    errors["_kpis"] = String(e?.message || e);
+  }
+
   let answers = { regenerated: 0, n_reviews: 0 };
   try {
     answers = await regenerateAnswers();
@@ -63,5 +74,5 @@ export async function POST(req: Request) {
     errors["_answers"] = String(e?.message || e);
   }
 
-  return Response.json({ per_source: perSource, errors, answers });
+  return Response.json({ per_source: perSource, errors, kpis_computed: kpisComputed, answers });
 }

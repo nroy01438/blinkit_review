@@ -35,16 +35,21 @@ let schemaReady: Promise<void> | null = null;
  * hand before the app works. */
 export function ensureSchema() {
   if (!schemaReady) {
-    schemaReady = sql()`
-      CREATE TABLE IF NOT EXISTS question_answers (
-        question_id    TEXT PRIMARY KEY,
-        question       TEXT NOT NULL,
-        answer         TEXT NOT NULL,
-        quotes         JSONB NOT NULL DEFAULT '[]'::jsonb,
-        n_reviews      INT NOT NULL DEFAULT 0,
-        generated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-      )
-    `.then(() => undefined);
+    schemaReady = (async () => {
+      await sql()`
+        CREATE TABLE IF NOT EXISTS question_answers (
+          question_id    TEXT PRIMARY KEY,
+          question       TEXT NOT NULL,
+          answer         TEXT NOT NULL DEFAULT '',
+          quotes         JSONB NOT NULL DEFAULT '[]'::jsonb,
+          n_reviews      INT NOT NULL DEFAULT 0,
+          generated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      // Added after the table already existed in some deployments —
+      // additive, safe to run every time.
+      await sql()`ALTER TABLE question_answers ADD COLUMN IF NOT EXISTS kpi JSONB`;
+    })();
   }
   return schemaReady;
 }

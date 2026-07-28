@@ -7,11 +7,19 @@ interface QuoteRow {
   source_name: string;
 }
 
+interface Kpi {
+  value: string;
+  n_matching: number;
+  n_total: number;
+  breakdown: { label: string; n: number }[];
+}
+
 interface QuestionAnswer {
   question_id: string;
   question: string;
   answer: string;
   quotes: QuoteRow[];
+  kpi: Kpi | null;
   n_reviews: number;
   generated_at: string;
 }
@@ -24,22 +32,44 @@ interface QuestionsResponse {
 }
 
 function QuestionCard({ qa }: { qa: QuestionAnswer }) {
+  const kpi = qa.kpi;
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="text-xs font-medium text-slate-500">{qa.question}</div>
-      <p className="mt-1 text-sm font-medium text-slate-900">{qa.answer}</p>
-      <div className="mt-1 text-xs text-slate-400">based on {qa.n_reviews} reviews</div>
-      {qa.quotes && qa.quotes.length > 0 && (
+      {kpi ? (
+        <>
+          <div className="mt-1 text-2xl font-semibold leading-tight text-slate-900">{kpi.value}</div>
+          <div className="mt-1 text-xs text-slate-400">
+            {kpi.n_matching}/{kpi.n_total} reviews match a keyword signal for this
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 text-sm text-slate-400">No data yet</div>
+      )}
+      {qa.answer && <p className="mt-2 text-sm text-slate-700">{qa.answer}</p>}
+      {((qa.quotes && qa.quotes.length > 0) || (kpi && kpi.breakdown.length > 1)) && (
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium text-blue-600">See the evidence</summary>
-          <div className="mt-2 space-y-1.5">
-            {qa.quotes.map((q, i) => (
-              <blockquote key={i} className="border-l-2 border-slate-200 pl-2 text-xs italic text-slate-600">
-                &ldquo;{q.quote}&rdquo;
-                <span className="ml-1 not-italic text-slate-400">— {q.source_name}</span>
-              </blockquote>
-            ))}
-          </div>
+          {kpi && kpi.breakdown.length > 1 && (
+            <ul className="mt-2 space-y-1 rounded-md bg-slate-50 p-2">
+              {kpi.breakdown.slice(0, 5).map((b, i) => (
+                <li key={i} className="flex justify-between text-xs text-slate-600">
+                  <span>{b.label}</span>
+                  <span className="font-medium text-slate-800">{b.n}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {qa.quotes && qa.quotes.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              {qa.quotes.map((q, i) => (
+                <blockquote key={i} className="border-l-2 border-slate-200 pl-2 text-xs italic text-slate-600">
+                  &ldquo;{q.quote}&rdquo;
+                  <span className="ml-1 not-italic text-slate-400">— {q.source_name}</span>
+                </blockquote>
+              ))}
+            </div>
+          )}
         </details>
       )}
     </div>
@@ -125,11 +155,12 @@ export default function HomePage() {
               <strong>{name}</strong>: fetched {counts.fetched}, added {counts.inserted} new
             </div>
           ))}
-          {syncResult.answers && (
-            <div className="mt-1">
-              Refreshed {syncResult.answers.regenerated} answers from {syncResult.answers.n_reviews} reviews.
-            </div>
-          )}
+          <div className="mt-1">
+            Recomputed {syncResult.kpis_computed ?? 0} KPIs
+            {syncResult.answers?.regenerated
+              ? ` and refreshed ${syncResult.answers.regenerated} AI narratives from ${syncResult.answers.n_reviews} reviews.`
+              : " (AI narrative refresh didn't complete this run — see below if there's an error)."}
+          </div>
           {syncResult.errors && Object.keys(syncResult.errors).length > 0 && (
             <div className="mt-1 text-amber-700">
               {Object.entries(syncResult.errors).map(([name, err]: [string, any]) => (
