@@ -26,7 +26,9 @@ def seed_sources() -> dict[str, int]:
                 """
                 INSERT INTO sources (name, kind, brand, config_json, is_active)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (name) DO UPDATE SET config_json = EXCLUDED.config_json
+                ON CONFLICT (name) DO UPDATE SET
+                    config_json = EXCLUDED.config_json,
+                    is_active = EXCLUDED.is_active
                 RETURNING id
                 """,
                 (s["name"], s["kind"], s.get("brand", "blinkit"), json.dumps(s.get("config", {})), s.get("enabled", True)),

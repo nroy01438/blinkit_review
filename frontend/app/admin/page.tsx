@@ -117,7 +117,27 @@ export default function AdminPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Sources</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Sources</h2>
+          <RunButton
+            label="Resync sources from config"
+            busy={running === "resync"}
+            onClick={async () => {
+              setRunning("resync");
+              try {
+                await api.post("/admin/sources/resync");
+                setSources(await fetchSources());
+              } finally {
+                setRunning(null);
+              }
+            }}
+          />
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          Editing <code>config/sources.yaml</code> in git (new seed URLs, enabling a source, fixing an app id)
+          only reaches this deployment&apos;s database after clicking this — the database is seeded once, not
+          re-read from the file on every request.
+        </p>
         {error && <p className="text-sm text-red-700">{error}</p>}
         {!sources ? (
           <p className="text-sm text-slate-500">Loading…</p>

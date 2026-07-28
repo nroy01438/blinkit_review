@@ -20,6 +20,21 @@ def list_sources() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+@router.post("/sources/resync")
+def resync_sources() -> dict:
+    """Re-applies config/sources.yaml's enabled/config values onto the
+    `sources` table. A deployment's DB is only seeded once — editing
+    sources.yaml in git (new seed_urls, flipping enabled, fixing an app_id)
+    otherwise never reaches an already-running deployment without shell
+    access to re-run `python -m aisle.db.seed`, which this exposes over
+    the API instead.
+    """
+    from aisle.db.seed import seed_sources
+
+    ids = seed_sources()
+    return {"resynced": ids}
+
+
 @router.post("/run/ingest")
 def run_ingest(dry_run: bool = False, limit_per_source: int = 100) -> dict:
     from aisle.ingest.runner import run_ingestion
