@@ -1,720 +1,119 @@
-# AISLE — Adaptive Insight & Signal Layer Engine
+# AISLE
 
-AISLE finds out why Blinkit users never walk down a new aisle. It ingests
-unstructured user conversations from many public sources, separates signal
-from noise with a PM-grade classifier cascade ("PM-Gate"), clusters the
-survivors into themes, generates PM-ready insights that are individually
-traceable to evidence, and measures and displays the quality of every
-insight it produces.
+**Why don't Blinkit users explore beyond their usual basket?**
 
-The business question: Blinkit users buy the same 8–12 SKUs from 2–3
-categories on repeat, out of a catalogue with thousands of SKUs across dozens
-of categories. **Why don't users explore?** AISLE tests the hypothesis that
-habit loops beat exploration — and is built to say so loudly if the data
-disagrees.
+A single page. Press **Sync reviews now**, and the app pulls the newest real
+reviews and discussions from Play Store, App Store, and Reddit (plus a manual
+upload for social media, since that can't be auto-scraped — see below), then
+shows plain-English answers to the eight questions that matter for growing
+category exploration, each backed by real quotes from the reviews it just
+read. No schedule, no jargon, no separate technical dashboards.
 
-> Phases 1–3 (skeleton, ingestion, PM-Gate) were originally built inside a
-> subdirectory of an unrelated repo (`Frontier-Map-`) and moved here as this
-> project's own repo, with a single squashed initial commit rather than the
-> original per-phase history. Nothing else about the code changed in the
-> move — see the per-phase commit messages preserved in that repo's
-> `claude/aisle-feedback-discovery-si9mih` branch if you want the detailed history.
+## What changed from the previous version
 
-## Status
+The previous version of this project was a much bigger build: a separate
+Python/FastAPI backend, a multi-stage LLM classification cascade, UMAP/HDBSCAN
+theme clustering, IQS insight grading with adversarial verification, a formal
+statistical evaluation harness (golden set, Cohen's kappa, calibration
+curves), deployed across three platforms (Vercel + Render + Supabase) plus a
+weekly GitHub Actions cron. It was real, tested engineering — and also
+exactly the reason the product felt like an engineering console instead of a
+PM tool.
 
-This is a phased build (see `BUILD ORDER` in the originating brief). Current
-state:
+This version keeps the goal and throws out the machinery in service of it:
 
-| Phase | Status |
+- **One deployment, not three.** Everything lives in this one Next.js app
+  (`frontend/`), deployed once to Vercel. There is no separate backend to
+  host, monitor, or restart — the "backend" is just this app's own API
+  routes, running as Vercel serverless functions.
+- **One button, not a cron.** Sync is manual, on demand. No GitHub Actions,
+  no scheduled job silently succeeding against a database nobody's looking
+  at.
+- **Direct AI synthesis, not a classification pipeline.** Each sync sends a
+  sample of the real, most-recent reviews to Groq in one call, asking it to
+  answer all eight questions in plain English with real supporting quotes.
+  This trades away the formal statistics (confidence intervals, hypothesis
+  tests) the old version had — if a specific number ever needs to be
+  defensible in a board meeting, that's worth adding back deliberately, not
+  by default.
+- **The real data is kept.** The database (Supabase) is unchanged — the
+  `sources` and `documents` tables already had real, already-synced reviews
+  in them, and this app reads/writes the exact same tables. The only new
+  thing is one small `question_answers` cache table, created automatically
+  on first use.
+
+## Setup
+
+This app needs three environment variables, set in Vercel's project
+settings (**Settings → Environment Variables** — not a local `.env` file,
+since there's no separate backend to run):
+
+| Variable | What it is |
 |---|---|
-| 1 — Skeleton | ✅ Done, verified |
-| 2 — Ingestion | ✅ Done, verified |
-| 3 — PM-Gate | ✅ Done, verified (see honesty caveat below — metrics are against a synthetic proxy, not real human labels) |
-| 4 — Themes | ✅ Done, verified (see honesty caveat below — embeddings use a deterministic local fallback, not the real sentence-transformer model) |
-| 5 — Insights + IQS | ✅ Done, verified (negative-control experiment run for real — see honesty caveats below) |
-| 6 — Frontend | ✅ Done, verified against the live API (see honesty caveats below — no shadcn/ui, /ask is a shell pending Phase 7) |
-| 7 — QnA agent | ✅ Done, verified live (all 8 question packs + free-form Q&A + a real refusal — see honesty caveats below) |
-| 8 — Cron + deploy | ✅ Done, verified live (deployment itself not exercised — see honesty caveats below) |
+| `DATABASE_URL` | The same Supabase connection string the previous backend used. |
+| `GROQ_API_KEY` | Free at [console.groq.com](https://console.groq.com). |
+| `AUTHOR_HASH_SALT` | Any random string — reviewers' usernames are hashed with this before being stored, never kept raw. |
 
-**This README is updated as later phases land — treat the table above as the
-live source of truth, not the prior-art comparison table below, which fills
-in once a full run exists.**
+Optional, for Reddit sync without rate-limit risk:
 
-## LLM provider: Groq, not Anthropic
+| Variable | What it is |
+|---|---|
+| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | Free, ~2 minutes at reddit.com/prefs/apps ("script" app type). Without these, Reddit sync falls back to Reddit's public unauthenticated search endpoint, which works but is more likely to get rate-limited. |
 
-The original brief specifies Anthropic Claude throughout. This deployment
-runs on **Groq** instead (`llama-3.1-8b-instant` for bulk classification,
-`llama-3.3-70b-versatile` for synthesis/verification) because that's the
-API key actually available for it — see `GROQ_API_KEY` in `.env.example`
-and the swap documented in `aisle/llm/client.py`'s docstring. Nothing
-outside `aisle/llm/client.py` needed to change: every other stage in the
-codebase calls `LLMClient.complete_json()` and never touches a provider
-SDK directly, which is the whole point of centralising provider access
-there. Swapping back to Anthropic (or to any other OpenAI-compatible
-provider) is a change to that one file, not a refactor.
+Once those are set, push to `main` (or click "Redeploy" in Vercel) and the
+site is live. No database migration to run — the two tables it needs
+(`sources`, `documents`) already exist with real data in them.
 
-## Important caveat: synthetic seed corpus
+**You can shut down the old Render service and delete its Postgres
+add-on if you had one separate from Supabase** — nothing points to Render
+anymore. The old `backend/` (FastAPI/Python) directory, `Dockerfile`, and
+`docker-compose.yml` were removed from this repo since nothing uses them;
+they're still recoverable from git history if you ever want to reference
+them.
 
-This build was produced in a sandboxed environment with **no live API keys**
-(Groq, Reddit) and **no scraping egress** to Play Store / App Store /
-Reddit. Rather than silently fake the corpus-depth numbers, every number
-in this README that would normally come from a real run is instead computed
-against a **documented synthetic seed corpus**
-(`data/samples/reviews.jsonl`, generated by
-`aisle.ingest.generate_synthetic_corpus`, 570 synthetic docs — junk, ops
-complaints, and discovery-relevant signal in English and Hinglish, across
-Blinkit/Zepto/Instamart, plus 50 fabricated "negative control" reviews for
-the §9 negative-control experiment).
+## How sync actually works
 
-Every real connector (Play Store, App Store, Reddit, forum, manual upload)
-is built to the same `RawDoc` contract and is ready to run for real the
-moment `MOCK_MODE=false` and real credentials are supplied — see
-`.env.example`. Hitting the brief's real ≥25,000-ingested / ≥3,000-relevant
-targets requires a run with those live credentials, most naturally via the
-weekly GitHub Action once repo secrets are set.
+Clicking **Sync reviews now** calls `POST /api/sync`, which:
 
-## How AISLE improves on the prior art (ReviewLens)
+1. Reads the active rows in the `sources` table (Play Store, App Store,
+   Reddit, plus a couple of best-effort forum/review-site URLs already
+   configured there from before).
+2. Fetches up to ~50 of the newest items per source (`?limit=` to change
+   this), skipping ones already in the database.
+3. Sends a sample of the most recent ~300 real reviews to Groq in one call,
+   asking it to answer all eight questions with real supporting quotes.
+   Every quote is checked against the actual review text before being shown
+   — a quote the model claims but that isn't a real substring of a real
+   review is dropped, not displayed.
+4. Caches the eight answers in `question_answers`, which is what the home
+   page actually reads (so loading the page doesn't re-run the AI every
+   time someone visits — only a sync does that).
 
-| Axis | ReviewLens (Spotify) | AISLE target | AISLE current (synthetic seed run) |
-|---|---|---|---|
-| Corpus depth | 166 discovery-relevant from 5,000 fetched | ≥3,000 from ≥25,000 | 570 synthetic docs ingested (real-run number pending live credentials) |
-| Statistical honesty | Naked percentages, no denominator | Every number ships `n`, denominator, Wilson 95% CI | Implemented in `aisle.insights.stats`; used for theme prevalence, insight prevalence, and segment rates; segment-difference claims require p<0.05 on a two-proportion z-test |
-| Classifier accountability | Never measured | Golden set: P/R/F1, Cohen's κ, calibration | Pipeline built and running; against the *synthetic proxy* labels (not real humans — see caveat below): stage-1 junk recall 0.93, stage-3 relevance F1 0.96, κ 0.93 — all three clear the §6 acceptance gate, but that gate hasn't been cleared against real human labels yet |
-| Traceability | None | Groundedness score via independent verifier | Implemented; every insight links to its evidence with an atomic-claim groundedness check that caps the grade at C on any unsupported claim — see the negative-control writeup below for a concrete case where that cap was the difference between B and C |
-| Freshness | One-shot | Weekly cron, emerging/decaying alerts | Implemented and run live: incremental ingest → classify-only-new → assign-or-cluster-residual → recompute prevalence/delta for every theme → regenerate insights only where prevalence moved beyond the prior CI → a Markdown digest with real alerts (a real run flagged the same out-of-band abstention rate found in Phase 3) |
-| Interrogability | Static export | RAG QnA agent with citations + refusal | Implemented and verified live: hybrid BM25+vector retrieval with RRF fusion, a refusal that actually fires on out-of-corpus questions, and all 8 mandated question packs answering with real computed n/CI — see the Phase 7 writeup below |
+**Honest limit**: Vercel serverless functions have a time cap (up to 60s is
+configured here via `export const maxDuration = 60` in the sync route,
+which is the practical ceiling on Vercel's Hobby plan). One click pulls a
+bounded batch, not your whole history at once — click it again for more,
+or raise `?limit=` a bit if a source's API allows it. If the real review
+volume grows enough that this stops being enough per click, that's the
+point to reconsider a dedicated background job instead of a
+request/response click — not before.
 
-## Tech stack
+**Social media conversations** are still not auto-scraped, on purpose — no
+major platform's terms of service allow scraping logged-in surfaces
+(X/Instagram/Facebook), and free API access no longer covers this either.
+Use the **Upload** page: export what you have as a CSV with a `text`
+column (optionally `author`, `rating`, `posted_at`, `url`), upload it, then
+press sync to fold it into the answers.
 
-Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui + Recharts
-frontend; Python 3.11 + FastAPI + Pydantic v2 backend; Postgres + pgvector;
-Groq for classification/synthesis (`llama-3.1-8b-instant` for bulk
-classification, `llama-3.3-70b-versatile` for synthesis — the brief's
-original stack specified Anthropic Claude, see the provider-swap note
-above); local sentence-transformers embeddings; UMAP + HDBSCAN clustering;
-hybrid BM25 + pgvector retrieval fused with RRF.
-
-## Repo layout
-
-```
-.
-├── config/            # scoring.yaml, sources.yaml, question_packs.yaml
-├── taxonomy/           # codes.yaml, themes.yaml (controlled vocabularies)
-├── prompts/            # NOT populated — see prompts/README.md: every
-│                         # prompt is actually an inline, versioned Python
-│                         # string constant, not an external .md file
-├── data/samples/        # synthetic seed corpus (see caveat above)
-├── backend/aisle/       # Python package: ingest, classify, cluster,
-│                         # insights, qa, llm, eval, jobs, api
-├── backend/tests/
-├── frontend/            # Next.js app (Phase 6)
-├── .github/workflows/    # weekly cron (Phase 8)
-└── docker-compose.yml
-```
-
-## Getting started
-
-### With Docker (once you have Docker available)
-
-```bash
-cp .env.example .env
-docker compose up -d db
-# apply schema + seed the synthetic corpus, then run the API in a shell with
-# the backend deps installed (see below), or build+run the `api` service:
-docker compose up --build api
-```
-
-### Without Docker (verified path — used to validate this Phase-1 build)
-
-The sandbox this was built in has no Docker daemon available (nested
-containers are blocked), so Phase 1 was verified against a local
-PostgreSQL 16 + `postgresql-16-pgvector` install instead:
-
-```bash
-cp .env.example .env   # then edit DATABASE_URL to point at your local Postgres
-
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-python -m aisle.db.migrate                        # apply schema
-python -m aisle.ingest.generate_synthetic_corpus   # writes data/samples/reviews.jsonl
-python -m aisle.db.seed                            # loads sources + documents
-
-pytest -q   # 19 tests: config, dedupe/simhash, PII hashing+redaction,
-             # LLM client mock-mode/caching/cost-accounting/schema-validation,
-             # and the seed-idempotency + corpus-queryability checkpoint
-
-uvicorn aisle.api.main:app --reload   # http://localhost:8000/health
-```
-
-### Frontend (Phase 6)
-
-With the backend above running on :8000:
+## Local development
 
 ```bash
 cd frontend
 npm install
-NEXT_PUBLIC_AISLE_API_URL=http://localhost:8000 npm run dev   # http://localhost:3000
+DATABASE_URL=<your-supabase-url> GROQ_API_KEY=<your-key> npm run dev
 ```
 
-The dashboard is empty until you've run the pipeline at least once — either
-via the CLIs above (`aisle.classify.run`, `aisle.cluster.run`,
-`aisle.insights.run`) or the "Run pipeline stages" buttons on `/admin`,
-which call the same code synchronously over HTTP.
-
-**Home page redesign.** The original `/` was the pipeline-health screen
-(funnel, classifier κ/F1, calibration) — accurate, but it's engineering
-detail, not the thing a PM actually asked for. `/` is now the eight
-mandated Discovery Question Packs (§10) answered directly, in plain
-language, each with its real supporting evidence and a rate/CI where one
-applies — backed by a new `GET /discovery-questions` endpoint
-(`aisle/api/routers/qa.py`) that runs all eight packs in one call. The old
-technical page moved to `/pipeline` (linked from the home page's footer,
-and still in the nav under "Advanced") rather than being deleted — the
-accountability metrics it shows are real and still worth having, just not
-the front door.
-
-## Architecture notes (Phase 1)
-
-- **`aisle/settings.py`** — the one place env/config is read. `Settings.require(field)`
-  fails loudly with a readable error instead of silently defaulting when a
-  key is missing; `MOCK_MODE`/`MOCK_LLM` are the documented way to run
-  without any external credentials at all.
-- **`aisle/llm/client.py`** — the *only* place the Groq API may be
-  called from. Every call goes through `complete_json()`: content-hash cache
-  lookup (`llm_cache` table) → cost-guardrail check against `--max-cost-usd`
-  → the real call (retried with exponential backoff) or a deterministic mock
-  → strict Pydantic schema validation → one corrective retry with the
-  validation error appended → on repeated failure, a row in
-  `needs_human_review` instead of a silent coercion.
-- **`aisle/db/migrations/0001_init.sql`** — the full data model from the
-  brief's §3 (sources, documents, classifications, embeddings, themes,
-  theme_documents, insights, insight_evidence, golden_labels, runs), plus
-  `llm_cache` and `needs_human_review` support tables.
-- **`aisle/ingest/dedupe.py`** — exact-dupe `content_hash` (NFKC-normalised
-  SHA256) and a SimHash-based near-dupe check at the brief's ~0.9 Jaccard
-  threshold.
-- **`aisle/ingest/pii.py`** — salted-SHA256 author hashing (raw usernames are
-  never persisted) and a regex PII redaction pass (email/phone/order-id).
-  The LLM PII pass called out in §2 is stubbed as a deliberate no-op
-  (`redact_pii_llm`) pending Phase 2, rather than silently assumed present.
-- **`aisle/ingest/generate_synthetic_corpus.py`** — produces the documented
-  synthetic seed corpus described above.
-
-## Architecture notes (Phase 2)
-
-- **`aisle/ingest/connectors/base.py`** — the `Connector` ABC (§4):
-  `fetch(since, limit, dry_run)`. Every concrete connector
-  (`playstore.py` via `google-play-scraper`, `appstore.py` via the public
-  iTunes RSS JSON feed, `reddit.py` via PRAW pulling both submissions and
-  comments, `forum.py`/`marketplace.py` via Trafilatura) has a real fetch
-  path *and* a `MOCK_MODE` path that serves from the synthetic pool, so the
-  same code runs identically once real credentials exist — flip
-  `MOCK_MODE=false` and nothing else changes. `social.py` and
-  `manual_upload.py` deliberately have no live fetch path (§4: no
-  logged-in-surface scraping) — they raise rather than silently returning
-  an empty list, which would look like "checked, found nothing."
-- **`aisle/ingest/pipeline.py`** — the single insert path: PII redact →
-  exact-dupe check (`content_hash`) → near-dupe check → insert with
-  `dupe_of_id` set on a match. The near-dupe *decision* is exact Jaccard
-  similarity over trigram shingles (`is_near_duplicate_text`), not the
-  SimHash bit-comparison — verified during testing that 64-bit SimHash over
-  a ~12-shingle short review is too noisy (misjudged a genuine ~92%-similar
-  pair as ~80%) to trust as the decision itself. SimHash is still computed
-  and stored per document as a future LSH-bucketing pre-filter for when the
-  corpus is too large for the current O(n)-per-source text scan.
-- **`aisle/ingest/runner.py`** — orchestrates incremental fetch across every
-  active source from `config/sources.yaml`, watermarked by
-  `sources.last_fetched_at`; one source's exception lands in the run's
-  `errors` map instead of aborting the others.
-- **`aisle/ingest/upload.py`** + **`aisle/api/routers/upload.py`** — the
-  upload utility (§5), one code path behind both the CLI
-  (`python -m aisle.ingest.upload --file ... --source-name ...`) and the
-  `/upload` API (`POST /upload/preview`, `POST /upload/commit`) that the
-  Phase 6 frontend will call. Auto-suggests a column mapping onto
-  `text/rating/posted_at/author/url/source/lang` by synonym + fuzzy match,
-  validates before committing (row count, % missing text, detected
-  languages, in-file and against-corpus duplicate counts, date range),
-  previews the first 20 normalised rows, and commits with partial-success
-  semantics (bad rows collected with a reason, never failing the whole
-  batch). Idempotent: rows without a natural id use `content_hash(text)` as
-  `external_id`, so re-uploading an identical file is a verified no-op.
-
-## Architecture notes (Phase 3)
-
-- **`aisle/classify/pmgate/cascade.py`** — the five-stage cascade (§6):
-  Stage 0 normalise (`stage0_normalise.py`: NFKC, emoji-run collapsing to one
-  kept emoji, repeated-char collapsing, lang detect — Hinglish is never
-  dropped) → Stage 1 junk gate (heuristics first, LLM fallback only when
-  heuristics don't confidently kill it) → Stage 2 PM utility scoring
-  (weights from `config/scoring.yaml`, specificity/actionability/evidence
-  scored independently of emotional_intensity) → Stage 3 discovery relevance
-  (orthogonal to utility on purpose) → Stage 4 structured extraction (only
-  run when relevance clears the floor) → Stage 5 confidence/abstention
-  (self-consistency resampling near verdict thresholds). Every stage writes
-  through `LLMClient`, so caching/cost-accounting/schema-validation is
-  inherited for free.
-- **Off-topic ops complaints are `is_junk=true, junk_reason='ops_off_topic'`**
-  — kept, never deleted, just short-circuited before relevance scoring and
-  excluded from discovery denominators. This is how the ops-bucket view
-  (Q6) stays queryable without a separate table.
-- **Anti-hallucination, enforced programmatically, not just prompted for**:
-  `stage4_extraction.py` rejects any extraction whose `supporting_span`
-  isn't a verbatim substring of the source text (routes to
-  `needs_human_review` instead), and filters `behaviour_codes`/
-  `barrier_codes` against `taxonomy/codes.yaml`, logging anything outside
-  the controlled vocabulary as a *proposed* code rather than silently
-  keeping free text that would make aggregation meaningless.
-- **`aisle/classify/pmgate/mock.py`** — MOCK_LLM responses are text-heuristic
-  functions (regex/keyword scoring), not random or ground-truth-derived —
-  they never read the synthetic corpus's `bucket_hint`/`negative_control`
-  flags. This matters specifically for the Phase 5 negative-control
-  experiment: if the mock could see which reviews are fabricated, that
-  experiment would be meaningless by construction.
-- **`aisle/eval/golden.py` + `aisle/eval/metrics.py` + `/admin/label`,
-  `/quality/metrics`** — stratified sampling, a labelling API, and P/R/F1 +
-  Cohen's κ + calibration + abstention-rate + the §6 acceptance gate
-  (stage-1 junk recall ≥0.90, stage-3 relevance F1 ≥0.80, κ ≥0.65).
-
-### Honesty caveats (Phase 3)
-
-- **No real golden set yet.** §6 requires 300 hand-labelled documents with
-  two independent annotators on ≥100 overlapping docs — that's real human
-  labour this sandbox cannot fabricate. `aisle/eval/golden.py` ships a
-  `generate_synthetic_proxy_labels()` function that labels documents from
-  the synthetic corpus's own `bucket_hint` (its generator's ground truth,
-  tagged `annotator_id='synthetic_proxy_v1'`) purely to exercise the metrics
-  pipeline end-to-end. The numbers in the comparison table above are
-  against that proxy — they prove the *pipeline* works, not that the
-  *classifier* meets the bar on real data. Use `/admin/label` to do the real
-  labelling; `human_vs_human_kappa()` is implemented and tested but has no
-  real second annotator's data to run on yet.
-- **Abstention rate is out of the target 5–12% band** (measured 34.7%
-  against the synthetic seed corpus). The mock confidence scores are simple
-  text heuristics, not a real model's calibrated confidence — this number
-  reflects the mock's calibration, not a conclusion about the rubric. It
-  will need to be re-measured once run against a real LLM; per §15, this
-  was deliberately *not* tuned to hit the target band artificially.
-
-## Architecture notes (Phase 4)
-
-- **`aisle/cluster/embed.py`** — an `EmbeddingProvider` interface (per the
-  brief's tech-stack table) with two implementations: the real
-  `SentenceTransformerEmbeddingProvider` (`all-MiniLM-L12-v2`, 384-dim,
-  lazy-imported so it's never touched under the fallback) and a
-  deterministic `HashingEmbeddingProvider` — see the honesty caveat below.
-  `embed_pending_documents()` embeds every non-junk, non-dupe,
-  relevance-eligible document without an `embeddings` row yet; idempotent.
-- **`aisle/cluster/themes.py`** — embed → UMAP (`n_neighbors=15,
-  min_dist=0.0`, reduced to 5 components for clustering, not 2 — 2D is a
-  visualization concern for Phase 6, not the clustering input) → HDBSCAN
-  (`min_cluster_size = max(15, 0.5% of corpus)`) → c-TF-IDF top terms per
-  cluster (`aisle/cluster/terms.py`, BERTopic-style: each cluster's
-  concatenated text is one "class document") → 8 nearest-to-centroid medoid
-  documents → LLM names the theme grounded *only* in those terms+medoids →
-  a merge pass (union-find over cluster pairs whose centroid cosine
-  similarity clears 0.85, each pair adjudicated by the LLM/mock rather than
-  merged automatically) → best-effort keyword-overlap mapping onto
-  `taxonomy/themes.yaml` (≥2 overlapping tokens, else `status='new'`) →
-  Wilson 95% CI on prevalence (`aisle/insights/stats.py`, shared with
-  Phase 5) → source/brand/segment/category splits folded into the single
-  `source_spread_json` column (the schema has one JSONB slot for all four)
-  → week-over-week delta against the same `taxonomy_node` (or, failing
-  that, exact label match) from the most recent prior run.
-- **`aisle/cluster/stability.py`** — re-clusters the same embeddings at 3
-  seeds (`config/scoring.yaml`'s `clustering.stability.seeds`) and reports
-  the mean Adjusted Rand Index across every seed pair, stored on
-  `themes.stability_ari`.
-- Verified end-to-end against the classified Phase-3 corpus (279 eligible
-  documents after the relevance floor): **5 themes, 16.9% HDBSCAN noise**
-  (well under the §7 25% alert threshold), **mean stability ARI 0.51**
-  (moderate — see caveat below), 3 of 5 themes mapped onto a
-  `taxonomy/themes.yaml` node automatically, and a second run correctly
-  marked the taxonomy-matched themes `stable` with `delta_vs_prev_run≈0`
-  instead of `new`.
-
-### Honesty caveats (Phase 4)
-
-- **Embeddings use a deterministic local fallback, not the real model.**
-  This sandbox has no network egress to Hugging Face to download
-  `all-MiniLM-L12-v2` (confirmed: the download attempt was declined).
-  `HashingEmbeddingProvider` projects word-bigram hashes into the same
-  384-dim space via fixed per-token random directions — cosine similarity
-  under it is a crude proxy for lexical overlap, not semantic similarity.
-  It clusters this corpus sensibly (the synthetic templates share a lot of
-  literal vocabulary), but it will **not** generalise to paraphrased real
-  reviews the way a real sentence embedding would. `get_embedding_provider()`
-  switches to the real model automatically the moment `MOCK_MODE=false` or
-  `AISLE_EMBEDDING_PROVIDER=sentence-transformer` is set — no code change
-  needed, just re-embed (`embeddings` rows are keyed by `model_name`, so old
-  hashing-based vectors and new real ones don't collide).
-- **Cross-run theme identity for un-mapped themes is fragile.** When a
-  theme's `taxonomy_node` is `null` (`status='new'`), matching it to "the
-  same theme" in a later run falls back to an exact label-string match —
-  and the mock namer's label is just its top-3 c-TF-IDF terms, which can
-  reorder slightly between runs even when the underlying document grouping
-  is effectively unchanged (observed directly: a 63-document cluster kept
-  an identical size and prevalence across two consecutive runs but got two
-  different labels, so it was recorded as `new` twice instead of `stable`
-  once). The fix is to match on centroid cosine similarity across runs
-  instead of label text; not implemented yet — documented rather than
-  quietly left to look more stable than it is.
-- **Stability ARI (0.51) is moderate, not strong**, consistent with the
-  hashing embedding's cruder notion of similarity — expect this to improve
-  once real sentence embeddings are in use.
-
-## Architecture notes (Phase 5)
-
-- **`aisle/insights/generate.py`** — one insight per theme (not theme
-  *pairs* — see caveat below): assembles an evidence pack
-  (`aisle/insights/evidence.py`: exemplar/medoid documents first, then a
-  random sample of the rest, capped at 30 given this corpus's actual
-  per-theme size), drafts a title/statement/so_what/opportunity/segments/
-  categories from that evidence only — with the theme's exact
-  doc_count/doc_total/prevalence/CI numbers *injected into the prompt* so
-  the model states them, rather than risking it recomputing or hallucinating
-  them — then runs an **isolated adversarial pass**
-  (`run_adversarial_pass`, no access to the draft, only the raw evidence)
-  and an **independent verifier pass** (`run_verification`: decomposes the
-  statement+so_what into atomic claims and checks each against the
-  evidence, plus rubric-scores actionability and novelty).
-- **Segment-difference testing** (§7/§8): `_segment_stats` computes each
-  segment's *within-cohort* rate (of all relevance-eligible documents in
-  that segment, what fraction land in this theme) with a Wilson CI, and
-  runs a two-proportion z-test between the two largest segments — the
-  z/p-value is only surfaced when `p < 0.05`, never asserted on vibes.
-- **`aisle/insights/iqs.py`** — all seven §9 components, weights from
-  `config/scoring.yaml`: groundedness (supported/total atomic claims),
-  evidence volume (log-scaled against corpus size), statistical precision
-  (inverse Wilson-CI width), source triangulation (Shannon entropy over the
-  source distribution, normalised by the corpus's actual source count),
-  temporal stability (full credit if matched to a prior run, half credit if
-  only bootstrap-stable, computed literally as a 200-resample bootstrap of
-  the CI per §9), actionability and novelty (from the verifier's rubric
-  scores). **Any unsupported claim caps the letter grade at C regardless of
-  the numeric total** — this is not decorative; see the negative-control
-  writeup below, where it's the actual reason a majority-fabricated theme
-  didn't land a B.
-- **`aisle/eval/negative_control.py`** — the §9 negative-control experiment.
-  It is the *only* module permitted to read `meta_json.negative_control`,
-  and only after generation, to grade the pipeline's own output — nothing
-  in classify/cluster/insight-generation ever looks at that flag (verified
-  by code review: grep the whole `classify/`, `cluster/`, `insights/`
-  packages for `negative_control` and the only hits are this file and the
-  corpus generator).
-
-### The negative-control result (run this yourself: `python -m aisle.eval.negative_control` after a cluster+insight run)
-
-The 50 fabricated "hidden discovery tax" reviews (near-identical template,
-brand/category substituted, spread across all three brands) clustered into
-their own theme, as expected given how templated they are: **63-document
-theme, 79.4% of it fabricated**. The pipeline generated an insight from it
-like any other theme — titled from its (slightly incoherent, mock-generated)
-top terms "Tax / Surcharge / Discovery" — and scored it:
-
-```
-raw weighted IQS total: 74  (novelty 10/10, groundedness 16.67/25,
-                              actionability 10/10, evidence_volume 11.07/15,
-                              source_triangulation 8.83/15,
-                              statistical_precision 12.07/15,
-                              temporal_stability 5/10)
-grade before the unsupported-claim cap: B
-grade actually assigned:                 C   ← the cap fired
-```
-
-**Verdict: PASS, but narrowly, and for a specific reason worth stating
-plainly.** The raw weighted score alone — evidence volume, triangulation,
-precision, novelty, actionability all computed exactly as specified — adds
-up to a *passing B grade* for a theme that is 79% fabricated. What actually
-kept it off the insights list at grade A/B was the "any unsupported claim
-caps the grade at C" rule: the independent verifier didn't find full
-support for every atomic claim in the drafted statement. That rule is doing
-real, load-bearing work here, not just a formality — remove it and this
-specific negative control would have failed. Two follow-on findings worth
-being explicit about rather than burying:
-
-- **Source triangulation (8.83/15) rewarded the fabricated theme more than
-  it should have** — the 50 injected reviews were spread evenly across all
-  three brands on purpose (to look like a real cross-brand category
-  problem), and the entropy-based triangulation score has no way to tell
-  "genuinely independent reports from three brands" apart from "the same
-  fabricated template posted under three brand labels." This is a real gap
-  in the §9 formula as specified, not a bug in this implementation of it —
-  flagging it is the point of running the experiment.
-- **The mock novelty heuristic (10/10) is too easily satisfied** — it scores
-  novelty from how many distinct categories/codes an evidence pack
-  references, which the fabricated theme has plenty of (it varies category
-  per review) despite the underlying claim being obviously suspicious to a
-  human reader. A real Groq call asked "would a PM already know this
-  without research" would very plausibly flag a "hidden discovery tax" as
-  implausible-sounding, not novel-and-credible; this mock heuristic doesn't
-  capture that distinction. Another honest gap, not smoothed over.
-
-### Honesty caveats (Phase 5)
-
-- **One insight per theme, not theme *pairs*.** §8 explicitly calls out
-  theme-pair interaction insights as where non-obvious findings live. Doing
-  that well needs enough per-pair evidence to be worth drafting from, which
-  this corpus's per-theme sizes (21–74 docs) don't comfortably support —
-  scoped out rather than generating hollow pair insights just to check the
-  box.
-- **The two gaps described in the negative-control writeup above
-  (triangulation rewarding coordinated-looking spread, novelty conflating
-  category variety with genuine surprise) are real weaknesses in the
-  current scoring implementation**, most visible under MOCK_LLM's
-  heuristic verifier/novelty scorer. A real Groq call for the
-  adversarial/verification passes would likely do better at both — worth
-  re-running this exact experiment once real credentials are available, to
-  see whether it's a mock-only artifact or a genuine formula gap.
-
-## Architecture notes (Phase 6)
-
-- **`frontend/`** — Next.js 14 App Router + TypeScript + Tailwind + Recharts,
-  all 8 mandated screens (`/`, `/workflow`, `/themes` + detail, `/insights` +
-  detail, `/quality`, `/ask`, `/upload`, `/admin`), each a client component
-  that fetches from the FastAPI backend at `NEXT_PUBLIC_AISLE_API_URL`
-  (`lib/api.ts`) — no mock data baked into the frontend anywhere.
-- **`components/PercentCI.tsx`** is the enforcement mechanism for §15's
-  "no naked percentage, anywhere" rule: every prevalence/rate shown in the
-  UI goes through this component, which always renders `n`/denominator and
-  the Wilson CI alongside the percentage — there's no shorter path to just
-  printing a number.
-- **New backend read endpoints** (`aisle/api/routers/overview.py`,
-  `runs.py`, `themes.py`, `insights.py`, `sources.py`) back the frontend;
-  `/admin/run/*` exposes synchronous on-demand triggers for each pipeline
-  stage (ingest/classify/cluster/insights) so the demo doesn't need a
-  terminal. `/quality/negative-control` surfaces the Phase 5 experiment's
-  real result in the UI, not just in README prose.
-- **Verified against the live stack, not just `next build`**: ran the
-  FastAPI backend and `next dev` together, hit all 8 screens plus theme and
-  insight detail pages with Playwright against the real classified/
-  clustered/insight-generated corpus, and confirmed real data renders
-  (screenshots taken during this build show the actual Wilson CIs, the real
-  IQS radar chart, and the real negative-control PASS verdict — not
-  placeholders). Also added `tests/test_api_routers.py`, a regression test
-  for a real bug this exposed: `/insights` and `/quality/negative-control`
-  threw `psycopg.errors.IndeterminateDatatype` on the frontend's actual
-  no-filter request shape (a bare `%s IS NULL OR col = %s` needs an
-  explicit `::type` cast when every call site passes `None`) — fixed, and
-  covered so it can't silently come back.
-
-### Honesty caveats (Phase 6)
-
-- **No shadcn/ui.** The brief's stack lists it; this build uses plain
-  Tailwind components (`components/*.tsx`) styled to the same effect
-  instead, to avoid the overhead of scaffolding a full generated component
-  library for a build already this large. Swapping specific components to
-  shadcn/ui later is a styling change, not an architecture change.
-- **`/ask` is a UI shell, not a working QnA agent.** It renders the 8
-  question packs and a chat input, calls `POST /ask`, and — verified — shows
-  an honest "not wired up yet" message on the 404 that endpoint currently
-  returns, rather than pretending to answer. Phase 7 implements the actual
-  agent behind it.
-- **Runs synchronously in-request, not in a queue.** `/admin/run/*`
-  blocks the HTTP request until the pipeline stage finishes — fine at this
-  corpus's size (seconds), but a real deployment would enqueue these
-  instead of holding a request open.
-
-## Architecture notes (Phase 7)
-
-- **`aisle/qa/retrieval.py`** — hybrid search: BM25 (`rank_bm25`) fused with
-  pgvector cosine similarity via Reciprocal Rank Fusion, then a lightweight
-  lexical-overlap rerank. Critically, a document only counts as genuinely
-  retrieved if it clears a real relevance bar (BM25 score > 0 *or* cosine
-  similarity ≥0.35) — RRF fusion alone always produces a full ranking of
-  the entire pool no matter how irrelevant the query is, which would make
-  the refusal rule below unable to ever fire. Found this the hard way: the
-  first version of the refusal test failed because "retrieval" was
-  returning the whole corpus, ranked, for a string of made-up words.
-- **`aisle/qa/tools.py`** — the five tools (§11): `search_reviews` (wraps
-  retrieval), `get_theme_stats`, `run_segment_comparison` (a real
-  two-proportion z-test between two segment cohorts' rates, with an
-  optional barrier/behaviour/category/sentiment/brand filter),
-  `compute_prevalence` (Wilson CI on an arbitrary filter), and `get_insight`.
-  Every one is a plain, independently callable, independently tested
-  function — the agent doesn't have any capability the tools themselves
-  don't have.
-- **`aisle/qa/agent.py`** — retrieves first; refuses outright (§11) below 5
-  retrieved documents, showing whatever few were found rather than
-  extrapolating; otherwise uses rule-based signal detection (segment names,
-  "compare"/"how many"/filter keywords, an explicit theme/insight
-  reference) to decide which additional tool(s) to call, executes them for
-  real, and only then synthesizes a cited answer from the actual evidence
-  and actual computed numbers.
-- **`aisle/qa/question_packs.py`** implements all 8 mandated packs (§10) as
-  dedicated analysis methods — not eight prompts routed through the chat
-  agent — each with its own retrieval/aggregation logic and a common
-  envelope (`answer_summary`, `n`, CI where applicable, `top_quotes`,
-  `chart_data`, `generated_at`) so the frontend renders them uniformly.
-  Verified live against the real corpus; representative real outputs from
-  one run: Q1 "201 of 279 documents show habitual-replenisher behaviour
-  (72.0%)", Q2 top barrier `unclear_return_policy` (48/279), Q7 explorer
-  segment shows exploration language at 89.7% vs. other segments lower,
-  each with a real two-proportion z-test where a comparison is drawn.
-- **Verified live, not just unit-tested**: ran the backend + frontend
-  together, exercised all 8 packs via `/question-packs/{id}/run`, asked a
-  free-form question that correctly triggered the segment-comparison tool
-  with real citations, and asked a nonsense question that correctly
-  produced the refusal message — see the screenshot from this build.
-
-### Honesty caveats (Phase 7)
-
-- **Tool selection is rule-based, not a free-form Groq tool-use loop.**
-  Under `MOCK_LLM` there is no real model choosing when to call which tool,
-  so a genuine agentic loop would have nothing authentic driving it in this
-  environment. The rules in `_decide_tools` are a legible stand-in for the
-  same signals a real tool-use loop would act on (segment names, filter
-  keywords, explicit references) — every tool underneath is real and
-  independently callable, so swapping in an actual Groq tool-calling loop
-  (Groq's chat-completions API supports `tools`/`tool_choice`, same shape
-  as OpenAI's) later is a change to *how tools get selected*, not to what
-  they do.
-- **No real multi-turn context threading server-side.** "Conversation
-  memory" is implemented client-side (`app/ask/page.tsx` keeps the thread
-  and exports it as a Markdown research note); each question still hits
-  `/ask` independently — the agent doesn't receive prior turns as context.
-  A real implementation would pass conversation history into the retrieval/
-  synthesis prompt.
-- **No token streaming.** `POST /ask` returns a complete JSON response, not
-  a token stream — `MOCK_LLM` doesn't produce a token stream to begin with
-  (`mock_synthesize` builds the whole answer in one call), so implementing
-  fake streaming on top of it would be theater, not substance. Deferred to
-  when this runs against a real, streaming-capable model call.
-- **Discovery-surface and information-gap extraction (Q3, Q5) are regex
-  keyword heuristics over raw text**, not a dedicated LLM extraction stage
-  — PM-Gate's Stage 4 (§6) doesn't extract these fields today. Reasonable
-  at this corpus's synthetic, template-driven vocabulary; a real corpus's
-  more varied phrasing would need either a dedicated extraction stage or a
-  more capable retrieval-based approach.
-- **Found and fixed a real Wilson-CI floating-point bug while building
-  this**: at the p=1.0 (or p=0.0) boundary, `wilson_ci`'s own arithmetic
-  could put the point estimate a few floating-point ULPs outside its own
-  interval (e.g. `ci_high=0.9999999999999998` when the rate is exactly
-  `1.0`) — `aisle/insights/stats.py` now clamps the interval to always
-  contain the point estimate, closing the gap rather than leaving callers
-  to work around it.
-
-## Architecture notes (Phase 8)
-
-- **`aisle/cluster/incremental.py`** — the weekly job's incremental
-  clustering (§12 step 4), deliberately distinct from
-  `aisle.cluster.themes.run_theme_clustering`'s full from-scratch
-  re-cluster: new documents are assigned to an existing theme when cosine
-  similarity to that theme's centroid clears `config/scoring.yaml`'s
-  `incremental_assign_cosine_threshold` (0.8); the unassigned residual is
-  clustered with the same UMAP+HDBSCAN pass Phase 4 uses, and any resulting
-  cluster that clears `min_cluster_size` becomes a new theme. Existing
-  themes are **updated in place** (same `id`, `run_id` bumped forward)
-  rather than re-inserted every run — every current theme's prevalence/CI/
-  delta gets recomputed against the grown corpus, not just the ones that
-  received new members, since the denominator moved for everyone.
-- **`aisle/jobs/weekly.py`** — chains incremental ingest (per-source
-  failure isolation already built into `aisle.ingest.runner` since Phase
-  2) → classify-only-new (already idempotent since Phase 3) → incremental
-  clustering → insight regeneration **only for themes that are brand new
-  or whose prevalence moved outside the prior run's CI** → alert detection
-  (new theme crossing 3% prevalence, >50% relative week-over-week move,
-  any ingestion error, an abstention-rate or cost anomaly) → a rendered
-  Markdown digest → an optional webhook post (honestly reports
-  `digest_webhook_sent: false` rather than pretending, when
-  `AISLE_DIGEST_WEBHOOK_URL` isn't set). Every stage's own idempotency is
-  what makes the whole job resumable — there's no separate checkpoint/
-  resume mechanism because none is needed.
-- **`.github/workflows/weekly.yml`** — the production cron (Sunday 20:30
-  UTC = Monday 02:00 IST), plus `workflow_dispatch` for on-demand runs. A
-  Postgres+pgvector service container gives it a real, empty database each
-  run. Runs in `MOCK_MODE` out of the box (so it works end-to-end on a
-  cold fork with zero secrets, per §14's checkpoint) and switches to real
-  mode automatically the moment an `GROQ_API_KEY` repo secret exists.
-- **`aisle/jobs/scheduler.py`** — the local-dev APScheduler equivalent of
-  the same schedule, for exercising the weekly job without a deployed
-  Action.
-- **Verified with a real run, not just tests**: uploaded 3 new documents,
-  ran `python -m aisle.jobs.weekly`, and got a genuine digest — 3
-  documents classified, all 7 current themes' prevalence recomputed
-  against the larger corpus (each shifted down slightly, correctly marked
-  `stable` since the shift was small), and one real alert (the abstention
-  rate outside its target band, the same finding from Phase 3, now
-  surfacing automatically as a routine weekly check instead of something
-  you'd only notice by reading the README).
-
-## Deployment
-
-Per the brief's tech stack: frontend on **Vercel**, API on
-**Railway/Render**, DB on **Supabase** (Postgres + pgvector). Not exercised
-in this sandbox (no accounts/tokens here) — these are the steps to actually
-deploy it:
-
-1. **Database (Supabase)**: create a project, enable the `vector` extension
-   (Database → Extensions → `vector`), then run
-   `python -m aisle.db.migrate` against its connection string once.
-2. **API (Railway/Render)**: deploy `backend/` (the `Dockerfile` is ready —
-   build context is the repo root, `dockerfile: backend/Dockerfile`,
-   matching `docker-compose.yml`). Set `DATABASE_URL` to the Supabase
-   connection string, `GROQ_API_KEY`, `MOCK_MODE=false`,
-   `MOCK_LLM=false`, and the other `.env.example` values.
-3. **Frontend (Vercel)**: import `frontend/` as the project root, set
-   `NEXT_PUBLIC_AISLE_API_URL` to the deployed API's URL.
-4. **Weekly cron**: `.github/workflows/weekly.yml` already targets
-   whichever `DATABASE_URL`/`GROQ_API_KEY` are set as repo secrets —
-   point them at the same Supabase/Groq credentials as the deployed
-   API and the schedule runs against the real, deployed database.
-5. **First real ingest**: a fresh database is empty — every dashboard
-   screen shows zeros until something is fetched. Open `/admin` and
-   click **"Ingest (live — fetch real reviews)"** (or **"Run full
-   pipeline"** to also classify/cluster/generate insights in one go).
-   The old dry-run button only ever previewed what *would* be fetched
-   and never wrote to the database — it's kept as a preview, but it's
-   not what populates the corpus.
-
-### Honesty caveats (Phase 8)
-
-- **Deployment itself was not exercised.** This sandbox has no Vercel/
-  Railway/Supabase accounts to actually deploy to. The steps above are
-  reviewed against the existing `Dockerfile`/`docker-compose.yml`/env-var
-  contract, not run end-to-end against real hosting.
-- **The GitHub Actions workflow has not been run by GitHub itself** — it
-  was authored and reviewed against the exact commands verified locally
-  (`aisle.db.migrate`, `aisle.ingest.generate_synthetic_corpus`,
-  `aisle.db.seed`, `aisle.jobs.weekly`), but this sandbox cannot trigger a
-  real Actions run to confirm the YAML itself is free of typos. Worth
-  triggering `workflow_dispatch` manually once this reaches GitHub to
-  confirm.
-- **Insight regeneration on a moved theme always inserts a new insight
-  row** rather than updating the prior one in place — consistent with how
-  every other run-scoped table in this schema works (themes, too, get a
-  fresh row's worth of updated stats each run via `run_id`), but it does
-  mean `/insights` accumulates one row per theme per week it moved, not a
-  single evolving row. Reasonable at this corpus's scale; would want
-  explicit versioning/superseding at a much larger one.
-- **"Recompute IQS for all active insights" (§12 step 7) is satisfied by
-  regeneration, not a cheaper in-place recompute.** An insight only gets a
-  fresh IQS when its theme is new or moved beyond its prior CI (which
-  re-drafts, re-adversarial-passes, and re-verifies it end to end) —
-  insights whose theme didn't move keep their existing IQS rather than
-  paying for a from-scratch verification pass that would very likely
-  reproduce the same numbers. Documented rather than implemented as a
-  separate lightweight recompute path, given the marginal value at this
-  corpus's size.
-
-## Known limitations / honesty notes
-
-- **No Docker in this sandbox.** `docker-compose.yml` is correct and intended
-  to be the primary path; it was validated by running the equivalent stack
-  (Postgres 16 + pgvector, same schema, same seed/test commands) directly on
-  the host instead.
-- **Synthetic, not scraped, corpus.** See the caveat above. Real connectors
-  exist and are ready to run once credentials are supplied.
-- **Real connector paths are code-reviewed, not live-tested.** This sandbox
-  has no egress to Play Store / App Store / Reddit and no Reddit OAuth
-  credentials, so `PlayStoreConnector._fetch_live`,
-  `AppStoreConnector._fetch_live`, and `RedditConnector._fetch_live` are
-  exercised by `dry_run=True` (which never makes a network call) but not by
-  an actual live fetch. The `MOCK_MODE=true` path they share code around
-  *is* fully tested. Treat the live paths as reviewed-but-unverified until
-  run with real credentials.
-- **Two-annotator golden set (§6)** requires real human labelling work this
-  build cannot fabricate — the `/admin/label` UI (Phase 3) is the tool for
-  you to do that labelling; κ and the acceptance gate are computed from
-  whatever labels actually get entered, never synthesized.
+There's nothing else to start — no backend, no Docker, no local Postgres
+required (though pointing `DATABASE_URL` at a local Postgres with the same
+`sources`/`documents` tables works fine too, if you'd rather not develop
+against production data).
