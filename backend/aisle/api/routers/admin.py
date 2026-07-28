@@ -59,13 +59,17 @@ def submit_label(payload: LabelSubmission) -> dict:
 
 @router.get("/quality/metrics")
 def quality_metrics(annotator_id: str = "synthetic_proxy_v1", round: int = 1, schema_version: str = "pmgate.v1") -> dict:
+    # Fetched once and reused below — each of these used to independently
+    # re-run the identical golden_labels/classifications join (and open its
+    # own DB connection to do it), 8 round trips for one page load.
+    rows = metrics_module.fetch_joined_labels(annotator_id, round)
     return {
-        "stage1_junk": metrics_module.stage1_junk_metrics(annotator_id, round),
-        "stage3_relevance": metrics_module.stage3_relevance_metrics(annotator_id, round),
-        "classifier_vs_human_kappa": metrics_module.classifier_vs_human_kappa(annotator_id, round),
-        "calibration": metrics_module.calibration_bins(annotator_id, round),
+        "stage1_junk": metrics_module.stage1_junk_metrics(annotator_id, round, rows=rows),
+        "stage3_relevance": metrics_module.stage3_relevance_metrics(annotator_id, round, rows=rows),
+        "classifier_vs_human_kappa": metrics_module.classifier_vs_human_kappa(annotator_id, round, rows=rows),
+        "calibration": metrics_module.calibration_bins(annotator_id, round, rows=rows),
         "abstention": metrics_module.abstention_rate(schema_version),
-        "acceptance_gate": metrics_module.acceptance_gate(annotator_id, round),
+        "acceptance_gate": metrics_module.acceptance_gate(annotator_id, round, rows=rows),
         "annotator_id_note": (
             "synthetic_proxy_v1 is NOT a real human annotator — see aisle/README.md. "
             "Real acceptance-gate numbers require labels from an actual /admin/label session."

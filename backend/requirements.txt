@@ -3,6 +3,7 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
 psycopg[binary]==3.2.3
+psycopg-pool==3.2.8
 pgvector==0.3.6
 groq==0.15.0
 PyYAML==6.0.2

@@ -15,7 +15,7 @@ ACCEPTANCE_THRESHOLDS = {
 }
 
 
-def _joined_labels(annotator_id: str, label_round: int = 1) -> list[dict]:
+def fetch_joined_labels(annotator_id: str, label_round: int = 1) -> list[dict]:
     with get_conn() as conn:
         return conn.execute(
             """
@@ -29,8 +29,8 @@ def _joined_labels(annotator_id: str, label_round: int = 1) -> list[dict]:
         ).fetchall()
 
 
-def stage1_junk_metrics(annotator_id: str, label_round: int = 1) -> dict:
-    rows = _joined_labels(annotator_id, label_round)
+def stage1_junk_metrics(annotator_id: str, label_round: int = 1, *, rows: list[dict] | None = None) -> dict:
+    rows = rows if rows is not None else fetch_joined_labels(annotator_id, label_round)
     rows = [r for r in rows if r["clf_is_junk"] is not None]
     if not rows:
         return {"precision": None, "recall": None, "f1": None, "n": 0}
@@ -43,8 +43,10 @@ def stage1_junk_metrics(annotator_id: str, label_round: int = 1) -> dict:
     }
 
 
-def stage3_relevance_metrics(annotator_id: str, label_round: int = 1, relevance_floor: int = 2) -> dict:
-    rows = _joined_labels(annotator_id, label_round)
+def stage3_relevance_metrics(
+    annotator_id: str, label_round: int = 1, relevance_floor: int = 2, *, rows: list[dict] | None = None
+) -> dict:
+    rows = rows if rows is not None else fetch_joined_labels(annotator_id, label_round)
     rows = [r for r in rows if r["clf_discovery_relevance"] is not None]
     if not rows:
         return {"precision": None, "recall": None, "f1": None, "n": 0}
@@ -57,8 +59,10 @@ def stage3_relevance_metrics(annotator_id: str, label_round: int = 1, relevance_
     }
 
 
-def classifier_vs_human_kappa(annotator_id: str, label_round: int = 1, field: str = "is_junk") -> dict:
-    rows = _joined_labels(annotator_id, label_round)
+def classifier_vs_human_kappa(
+    annotator_id: str, label_round: int = 1, field: str = "is_junk", *, rows: list[dict] | None = None
+) -> dict:
+    rows = rows if rows is not None else fetch_joined_labels(annotator_id, label_round)
     rows = [r for r in rows if r["clf_is_junk"] is not None]
     if len(rows) < 2:
         return {"kappa": None, "n": len(rows)}
@@ -89,12 +93,14 @@ def human_vs_human_kappa(annotator_a: str, annotator_b: str, field: str, label_r
     return {"kappa": round(float(cohen_kappa_score(y_a, y_b)), 4), "n": len(rows)}
 
 
-def calibration_bins(annotator_id: str, label_round: int = 1, n_bins: int = 5) -> list[dict]:
+def calibration_bins(
+    annotator_id: str, label_round: int = 1, n_bins: int = 5, *, rows: list[dict] | None = None
+) -> list[dict]:
     """Predicted confidence vs actual accuracy (is_junk agreement), bucketed
     into `n_bins` equal-width confidence bins. A well-calibrated classifier
     has actual_accuracy ~= mean_predicted_confidence in every bin.
     """
-    rows = _joined_labels(annotator_id, label_round)
+    rows = rows if rows is not None else fetch_joined_labels(annotator_id, label_round)
     rows = [r for r in rows if r["clf_is_junk"] is not None and r["clf_confidence"] is not None]
     bins = [{"bin_low": i / n_bins, "bin_high": (i + 1) / n_bins, "n": 0, "correct": 0, "confidence_sum": 0.0} for i in range(n_bins)]
     for r in rows:
@@ -130,10 +136,11 @@ def abstention_rate(schema_version: str) -> dict:
     return {"n": n, "abstained": abstained, "rate": round(abstained / n, 4) if n else 0.0}
 
 
-def acceptance_gate(annotator_id: str, label_round: int = 1) -> dict:
-    junk = stage1_junk_metrics(annotator_id, label_round)
-    relevance = stage3_relevance_metrics(annotator_id, label_round)
-    kappa = classifier_vs_human_kappa(annotator_id, label_round)
+def acceptance_gate(annotator_id: str, label_round: int = 1, *, rows: list[dict] | None = None) -> dict:
+    rows = rows if rows is not None else fetch_joined_labels(annotator_id, label_round)
+    junk = stage1_junk_metrics(annotator_id, label_round, rows=rows)
+    relevance = stage3_relevance_metrics(annotator_id, label_round, rows=rows)
+    kappa = classifier_vs_human_kappa(annotator_id, label_round, rows=rows)
 
     checks = {
         "stage1_junk_recall": {
