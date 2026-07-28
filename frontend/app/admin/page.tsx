@@ -33,7 +33,7 @@ export default function AdminPage() {
   async function runFullPipeline() {
     setRunning("full-pipeline");
     const steps: [string, string][] = [
-      ["ingest (live)", "/admin/run/ingest?dry_run=false&limit_per_source=200"],
+      ["ingest (live)", "/admin/run/ingest?dry_run=false&limit_per_source=500"],
       ["classify", "/admin/run/classify"],
       ["cluster", "/admin/run/cluster"],
       ["insights", "/admin/run/insights"],
@@ -92,7 +92,7 @@ export default function AdminPage() {
           <RunButton
             label="Ingest (live — fetch real reviews)"
             busy={running === "ingest-live"}
-            onClick={() => run("ingest-live", "/admin/run/ingest?dry_run=false&limit_per_source=200")}
+            onClick={() => run("ingest-live", "/admin/run/ingest?dry_run=false&limit_per_source=500")}
           />
           <RunButton label="Ingest (dry-run preview)" busy={running === "ingest"} onClick={() => run("ingest", "/admin/run/ingest?dry_run=true")} />
           <RunButton label="Classify" busy={running === "classify"} onClick={() => run("classify", "/admin/run/classify")} />
